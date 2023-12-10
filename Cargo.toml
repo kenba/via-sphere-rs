@@ -1,0 +1,20 @@
+[package]
+name = "via-sphere"
+version = "0.1.0"
+authors = ["Ken Barker <ken.barker@via-technology.aero>"]
+description = "A library for performing geometric calculations on the surface of a sphere."
+readme = "README.md"
+license = "MIT"
+edition = "2021"
+publish = false
+
+[dependencies]
+libm = "0.2"
+contracts = "0.6"
+nalgebra = "0.32"
+serde = { version = "1.0", features = ["derive"] }
+
+[dev-dependencies]
+csv = "1.1"
+serde_json = "1.0"
+geojson = "0.24"

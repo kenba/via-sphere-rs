@@ -1,7 +1,7 @@
 # via-sphere
 
 [![License](https://img.shields.io/badge/License-MIT-blue)](https://opensource.org/license/mit/)
-[![Rust](https://github.com/kenba/via-sphere-rs/workflows/Rust/badge.svg)](https://github.com/kenba/via-sphere-rs/actions)
+[![Rust](https://github.com/kenba/via-sphere-rs/actions/workflows/rust.yml/badge.svg)](https://github.com/kenba/via-sphere-rs/actions)
 
 A library for performing geometric calculations on the surface of a sphere.
 

@@ -1,0 +1,25 @@
+@startuml
+
+'Copyright (c) 2024 Via Technology Ltd. All Rights Reserved.
+
+' title LatLong Class Diagram
+
+set namespaceSeparator ::
+
+    namespace latlong {
+        class geojson::Polygon {
+            + exterior
+            + interiors
+        }
+        
+        class LatLong {
+            - lat
+            - lon
+        }
+
+        geojson::MultiPolygons *-- "1..*" geojson::Polygon
+        geojson::Polygon   *-- "1..*" LatLongs
+        geojson::MultiLatLongs *-- "1..*" LatLongs
+        LatLongs *-- "2..*" LatLong
+    }
+@enduml

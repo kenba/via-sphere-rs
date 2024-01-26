@@ -1,0 +1,64 @@
+@startuml
+
+'Copyright (c) 2024 Via Technology Ltd. All Rights Reserved.
+
+' title Sphere Class Diagram
+
+set namespaceSeparator ::
+
+    namespace sphere {
+        class ArcString {
+            - points
+            - poles
+            - arc_lengths
+        }
+        class Arc {
+            - a
+            - pole
+            - length
+            - half_width
+        }
+        class Point {
+            - x
+            - y
+            - z
+        }
+
+        ArcString . Arc
+        ArcString *-- "2..*" Point
+        ArcString .. great_circle
+        Arc .. great_circle
+        great_circle - Point
+
+        Arc *-- "2" Point
+    }
+
+    namespace latlong {
+        class LatLong {
+            - lat
+            - lon
+        }
+
+        LatLongs *-- "2..*" LatLong
+    }
+
+    namespace trig {
+        class Angle {
+            - sin
+            - cos
+        }
+        class UnitNegRange
+        class Degrees
+        class Radians
+
+        Angle *-- "2" UnitNegRange
+        Angle . Degrees
+        Angle .. Radians
+    }
+
+    sphere::ArcString . latlong::LatLongs
+    sphere::Arc . "2" latlong::LatLong
+    sphere::Point . latlong::LatLong
+    sphere::Point *-- "3" trig::UnitNegRange
+    latlong::LatLong *-- "2" trig::Angle
+@enduml

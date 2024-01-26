@@ -1,4 +1,4 @@
-// Copyright (c) 2020-2023 Via Technology Ltd. All Rights Reserved.
+// Copyright (c) 2020-2024 Via Technology Ltd. All Rights Reserved.
 
 // Permission is hereby granted, free of charge, to any person obtaining a copy
 // of this software and associated documentation files (the "Software"),
@@ -18,14 +18,18 @@
 // OUT OF OR IN CONNECTION WITH THE SOFTWARE OR THE USE OR OTHER DEALINGS IN
 // THE SOFTWARE.
 
-//! The great_circle3d module contains functions for calculating aspects of
+//! The `great_circle` module contains functions for calculating aspects of
 //! great circles on a unit sphere.
 
-use super::e2gc_distance;
-use super::point3d::*;
-use crate::trig::{swap_sin_cos, Angle, Radians, UnitNegRange};
+#![allow(clippy::suboptimal_flops)]
+
+pub mod intersection;
+
+use super::{are_orthogonal, is_unit, sq_distance, Point, MIN_LENGTH, SQ_EPSILON};
+use crate::trig;
+use crate::trig::{Angle, Radians, UnitNegRange};
 use crate::Validate;
-use contracts::*;
+use contracts::{debug_ensures, debug_requires};
 
 /// Calculate the right hand pole vector of a Great Circle from an initial
 /// position and an azimuth.  
@@ -37,12 +41,13 @@ use contracts::*;
 /// returns the right hand pole vector of the great circle.
 #[debug_requires(lat.is_valid_latitude())]
 #[debug_ensures(is_unit(&ret))]
-pub fn calculate_pole(lat: Angle, lon: Angle, azi: Angle) -> Point3d {
+#[must_use]
+pub fn calculate_pole(lat: Angle, lon: Angle, azi: Angle) -> Point {
     let x = UnitNegRange::clamp(lon.sin() * azi.cos() - lat.sin() * lon.cos() * azi.sin());
     let y = UnitNegRange::clamp(-lon.cos() * azi.cos() - lat.sin() * lon.sin() * azi.sin());
     let z = UnitNegRange(lat.cos() * azi.sin());
 
-    Point3d::new(x.0, y.0, z.0)
+    Point::new(x.0, y.0, z.0)
 }
 
 /// Calculate the azimuth at a point on the Great Circle defined by pole.
@@ -51,11 +56,12 @@ pub fn calculate_pole(lat: Angle, lon: Angle, azi: Angle) -> Point3d {
 ///
 /// returns the azimuth at the point on the great circle.
 #[debug_requires(is_unit(point) && is_unit(pole) && are_orthogonal(point, pole))]
-pub fn calculate_azimuth(point: &Point3d, pole: &Point3d) -> Angle {
+#[must_use]
+pub fn calculate_azimuth(point: &Point, pole: &Point) -> Angle {
     const MAX_LAT: f64 = 1.0 - 2.0 * std::f64::EPSILON;
 
     let sin_lat = point.z;
-    // if a is close to the North or South poles, azimuth is 180 or 0.
+    // if the point is close to the North or South poles, azimuth is 180 or 0.
     if MAX_LAT <= libm::fabs(sin_lat) {
         return if 0.0 < sin_lat {
             Angle::from_y_x(0.0, -1.0)
@@ -78,12 +84,13 @@ pub fn calculate_azimuth(point: &Point3d, pole: &Point3d) -> Angle {
 /// returns the direction vector at the point on the great circle.
 #[debug_requires(lat.is_valid_latitude())]
 #[debug_ensures(is_unit(&ret))]
-pub fn calculate_direction(lat: Angle, lon: Angle, azi: Angle) -> Point3d {
+#[must_use]
+pub fn calculate_direction(lat: Angle, lon: Angle, azi: Angle) -> Point {
     let x = UnitNegRange::clamp(-lat.sin() * lon.cos() * azi.cos() - lon.sin() * azi.sin());
     let y = UnitNegRange::clamp(-lat.sin() * lon.sin() * azi.cos() + lon.cos() * azi.sin());
     let z = UnitNegRange(lat.cos() * azi.cos());
 
-    Point3d::new(x.0, y.0, z.0)
+    Point::new(x.0, y.0, z.0)
 }
 
 /// Calculate the direction vector of a Great Circle arc.
@@ -93,7 +100,8 @@ pub fn calculate_direction(lat: Angle, lon: Angle, azi: Angle) -> Point3d {
 /// returns the direction vector at the point on the great circle.
 #[debug_requires(is_unit(a) && is_unit(pole) && are_orthogonal(a, pole))]
 #[debug_ensures(is_unit(&ret))]
-pub fn direction(a: &Point3d, pole: &Point3d) -> Point3d {
+#[must_use]
+pub fn direction(a: &Point, pole: &Point) -> Point {
     pole.cross(a)
 }
 
@@ -105,7 +113,8 @@ pub fn direction(a: &Point3d, pole: &Point3d) -> Point3d {
 /// returns the position vector at the point on the great circle.
 #[debug_requires(is_unit(a) && is_unit(dir) && are_orthogonal(a, dir))]
 #[debug_ensures(is_unit(&ret))]
-pub fn position(a: &Point3d, dir: &Point3d, distance: Angle) -> Point3d {
+#[must_use]
+pub fn position(a: &Point, dir: &Point, distance: Angle) -> Point {
     distance.cos() * a + distance.sin() * dir
 }
 
@@ -118,7 +127,7 @@ pub fn position(a: &Point3d, dir: &Point3d, distance: Angle) -> Point3d {
 /// rotated by angle.
 #[debug_requires(is_unit(dir) && is_unit(pole) && are_orthogonal(dir, pole))]
 #[debug_ensures(is_unit(&ret))]
-pub fn rotate(dir: &Point3d, pole: &Point3d, angle: Angle) -> Point3d {
+pub fn rotate(dir: &Point, pole: &Point, angle: Angle) -> Point {
     position(dir, pole, angle)
 }
 
@@ -131,7 +140,7 @@ pub fn rotate(dir: &Point3d, pole: &Point3d, angle: Angle) -> Point3d {
 /// returns the position vector at angle and radius from the start point.
 #[debug_requires(is_unit(a) && is_unit(pole) && are_orthogonal(a, pole))]
 #[debug_ensures(is_unit(&ret))]
-pub fn rotate_position(a: &Point3d, pole: &Point3d, angle: Angle, radius: Angle) -> Point3d {
+pub fn rotate_position(a: &Point, pole: &Point, angle: Angle, radius: Angle) -> Point {
     position(a, &rotate(&direction(a, pole), pole, angle), radius)
 }
 
@@ -142,7 +151,8 @@ pub fn rotate_position(a: &Point3d, pole: &Point3d, angle: Angle, radius: Angle)
 ///
 /// returns the sine of the across track distance of point relative to the pole.
 #[debug_ensures(UnitNegRange::is_valid(&ret))] // guaranteed by clamp
-fn sin_xtd(pole: &Point3d, point: &Point3d) -> UnitNegRange {
+#[must_use]
+fn sin_xtd(pole: &Point, point: &Point) -> UnitNegRange {
     UnitNegRange::clamp(pole.dot(point))
 }
 
@@ -153,7 +163,8 @@ fn sin_xtd(pole: &Point3d, point: &Point3d) -> UnitNegRange {
 /// returns the across track distance of point relative to pole.
 #[debug_requires(is_unit(pole) && is_unit(point))]
 #[debug_ensures(libm::fabs(ret.0) <= std::f64::consts::FRAC_PI_2)]
-pub fn cross_track_distance(pole: &Point3d, point: &Point3d) -> Radians {
+#[must_use]
+pub fn cross_track_distance(pole: &Point, point: &Point) -> Radians {
     Radians(libm::asin(sin_xtd(pole, point).0))
 }
 
@@ -165,12 +176,13 @@ pub fn cross_track_distance(pole: &Point3d, point: &Point3d) -> Radians {
 /// returns the square of the euclidean distance of point relative to pole.
 #[debug_requires(is_unit(pole) && is_unit(point))]
 #[debug_ensures(ret <= std::f64::consts::FRAC_PI_2 * std::f64::consts::FRAC_PI_2)]
-pub fn sq_cross_track_distance(pole: &Point3d, point: &Point3d) -> f64 {
+#[must_use]
+pub fn sq_cross_track_distance(pole: &Point, point: &Point) -> f64 {
     let sin_d = libm::fabs(sin_xtd(pole, point).0);
     if sin_d < 2.0 * std::f64::EPSILON {
         0.0
     } else {
-        2.0 * (1.0 - swap_sin_cos(UnitNegRange(sin_d)).0)
+        2.0 * (1.0 - trig::swap_sin_cos(UnitNegRange(sin_d)).0)
     }
 }
 
@@ -180,7 +192,8 @@ pub fn sq_cross_track_distance(pole: &Point3d, point: &Point3d) -> f64 {
 ///
 /// returns the closest point on a plane to the given point.
 #[debug_requires(is_unit(pole))]
-fn calculate_point_on_plane(pole: &Point3d, point: &Point3d) -> Point3d {
+#[must_use]
+fn calculate_point_on_plane(pole: &Point, point: &Point) -> Point {
     let t = sin_xtd(pole, point);
     point - pole * t.0
 }
@@ -192,7 +205,8 @@ fn calculate_point_on_plane(pole: &Point3d, point: &Point3d) -> Point3d {
 /// * `pole` - the pole of the Great Circle arc.
 /// * `point` - the point.
 /// returns the square of the Euclidean along track distance
-pub fn sq_along_track_distance(a: &Point3d, pole: &Point3d, point: &Point3d) -> f64 {
+#[must_use]
+pub fn sq_along_track_distance(a: &Point, pole: &Point, point: &Point) -> f64 {
     let plane_point = calculate_point_on_plane(pole, point);
     if plane_point.norm() < MIN_LENGTH {
         0.0
@@ -212,7 +226,8 @@ pub fn sq_along_track_distance(a: &Point3d, pole: &Point3d, point: &Point3d) -> 
 /// of a great circle arc..
 #[debug_requires(are_orthogonal(a, pole) && is_unit(point))]
 #[debug_ensures(UnitNegRange::is_valid(&ret))] // guaranteed by clamp
-pub fn sin_atd(a: &Point3d, pole: &Point3d, point: &Point3d) -> UnitNegRange {
+#[must_use]
+pub fn sin_atd(a: &Point, pole: &Point, point: &Point) -> UnitNegRange {
     UnitNegRange::clamp(pole.cross(a).dot(point))
 }
 
@@ -225,13 +240,14 @@ pub fn sin_atd(a: &Point3d, pole: &Point3d, point: &Point3d) -> UnitNegRange {
 /// returns the along track distance of point relative to the start of a great circle arc.
 #[debug_requires(is_unit(a) && is_unit(pole) && are_orthogonal(a, pole))]
 #[debug_ensures(libm::fabs(ret.0) <= std::f64::consts::PI)]
-pub fn along_track_distance(a: &Point3d, pole: &Point3d, point: &Point3d) -> Radians {
+#[must_use]
+pub fn along_track_distance(a: &Point, pole: &Point, point: &Point) -> Radians {
     let sq_atd = sq_along_track_distance(a, pole, point);
     if sq_atd <= SQ_EPSILON {
         Radians(0.0)
     } else {
         Radians(libm::copysign(
-            e2gc_distance(libm::sqrt(sq_atd)).0,
+            trig::e2gc_distance(libm::sqrt(sq_atd)).0,
             sin_atd(a, pole, point).0,
         ))
     }
@@ -245,7 +261,8 @@ pub fn along_track_distance(a: &Point3d, pole: &Point3d, point: &Point3d) -> Rad
 /// returns the along and across track distances of point relative to the
 /// start of a great circle arc.
 #[debug_requires(is_unit(a) && is_unit(pole) && are_orthogonal(a, pole) && is_unit(p))]
-pub fn calculate_atd_and_xtd(a: &Point3d, pole: &Point3d, p: &Point3d) -> (Radians, Radians) {
+#[must_use]
+pub fn calculate_atd_and_xtd(a: &Point, pole: &Point, p: &Point) -> (Radians, Radians) {
     let mut atd = Radians(0.0);
     let mut xtd = Radians(0.0);
 
@@ -270,7 +287,7 @@ pub fn calculate_atd_and_xtd(a: &Point3d, pole: &Point3d, p: &Point3d) -> (Radia
                 };
             }
             atd = Radians(libm::copysign(
-                e2gc_distance(libm::sqrt(sq_d)).0,
+                trig::e2gc_distance(libm::sqrt(sq_d)).0,
                 sin_atd(a, pole, p).0,
             ));
         } else {
@@ -292,12 +309,9 @@ pub fn calculate_atd_and_xtd(a: &Point3d, pole: &Point3d, p: &Point3d) -> (Radia
 /// * `p` - the point.
 ///
 /// returns the shortest distance of the point from the great circle arc.
-pub fn calculate_shortest_distance(
-    a: &Point3d,
-    pole: &Point3d,
-    length: Radians,
-    p: &Point3d,
-) -> Radians {
+#[allow(clippy::similar_names)]
+#[must_use]
+pub fn calculate_shortest_distance(a: &Point, pole: &Point, length: Radians, p: &Point) -> Radians {
     let (atd, xtd) = calculate_atd_and_xtd(a, pole, p);
 
     // if point abeam arc then cross track distance is closest
@@ -315,13 +329,13 @@ pub fn calculate_shortest_distance(
         sq_distance(a, p)
     };
 
-    e2gc_distance(libm::sqrt(sq_d))
+    trig::e2gc_distance(libm::sqrt(sq_d))
 }
 
 #[cfg(test)]
 mod tests {
-    use crate::sphere::great_circle3d::*;
-    use crate::sphere::point3d::Point3d;
+    use super::*;
+    use crate::sphere::*;
     use crate::trig::{Angle, Degrees, DEG2RAD};
 
     #[test]
@@ -367,13 +381,13 @@ mod tests {
         let one_eighty = Angle::from(Degrees(180.0));
 
         // North pole
-        let point_np = Point3d::new(0.0, 0.0, 1.0);
+        let point_np = Point::new(0.0, 0.0, 1.0);
 
         // South pole
         let point_sp = -point_np;
 
         // Equator Greenwich meridian
-        let point_1 = Point3d::new(1.0, 0.0, 0.0);
+        let point_1 = Point::new(1.0, 0.0, 0.0);
         let pole_0 = point_np.cross(&point_1);
 
         // Azimuth at North pole
@@ -438,14 +452,15 @@ mod tests {
 
     #[test]
     fn test_arc_direction_1() {
-        let point_0 = Point3d::new(1.0, 0.0, 0.0);
-        let point_1 = Point3d::new(0.0, 1.0, 0.0);
-        let point_2 = Point3d::new(0.0, 0.0, 1.0);
-        let point_3 = Point3d::new(0.0, 0.0, -1.0);
+        let point_0 = Point::new(1.0, 0.0, 0.0);
+        let point_1 = Point::new(0.0, 1.0, 0.0);
+        let point_2 = Point::new(0.0, 0.0, 1.0);
+        let point_3 = Point::new(0.0, 0.0, -1.0);
 
         assert_eq!(point_2, direction(&point_1, &point_0));
         assert_eq!(point_3, direction(&point_0, &point_1));
     }
+
     #[test]
     fn test_calculate_pole_direction_and_azimuths() {
         let degree_45 = Angle::from(Degrees(45.0));
@@ -462,19 +477,8 @@ mod tests {
             assert!(delta_azi <= 2.0 * std::f64::EPSILON);
 
             // Ensure pole and direction vectors are orthogonal
-            let test_dir = calculate_direction(degree_45, degree_45, azimuth);
+            let test_dir = direction(&point_1, &test_pole);
             assert!(are_orthogonal(&test_pole, &test_dir));
-
-            // Ensure direction vectors are virtually the same
-            let dir_pole = direction(&point_1, &test_pole);
-            let delta_x = libm::fabs(test_dir.x - dir_pole.x);
-            let delta_y = libm::fabs(test_dir.y - dir_pole.y);
-            let delta_z = libm::fabs(test_dir.z - dir_pole.z);
-            assert!(
-                (delta_x <= std::f64::EPSILON)
-                    || (delta_y <= std::f64::EPSILON)
-                    || (delta_z <= std::f64::EPSILON)
-            );
         }
     }
 
@@ -517,7 +521,7 @@ mod tests {
 
         // Arc on the Equator
         let point_0 = to_sphere(zero, zero);
-        let pole_0 = Point3d::new(0.0, 0.0, 1.0);
+        let pole_0 = Point::new(0.0, 0.0, 1.0);
 
         let (atd, xtd) = calculate_atd_and_xtd(&point_0, &pole_0, &point_0);
         assert_eq!(Radians(0.0), atd);
@@ -548,7 +552,7 @@ mod tests {
 
         // Arc on the Equator
         let point_0 = to_sphere(zero, zero);
-        let pole_0 = Point3d::new(0.0, 0.0, 1.0);
+        let pole_0 = Point::new(0.0, 0.0, 1.0);
 
         // North of Equator
         let latitude = one_degree;

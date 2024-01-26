@@ -1,4 +1,4 @@
-// Copyright (c) 2020-2022 Via Technology Ltd. All Rights Reserved.
+// Copyright (c) 2020-2024 Via Technology Ltd. All Rights Reserved.
 
 // Permission is hereby granted, free of charge, to any person obtaining a copy
 // of this software and associated documentation files (the "Software"),
@@ -18,34 +18,35 @@
 // OUT OF OR IN CONNECTION WITH THE SOFTWARE OR THE USE OR OTHER DEALINGS IN
 // THE SOFTWARE.
 
-//! The arc3dstring module contains the Arc3dString type and its associated functions.
+//! The `arcstring` module contains the `ArcString` type and its associated functions.
 
-use super::arc3d::*;
-use super::great_circle3d::*;
-use super::point3d::*;
-use super::*;
+use super::arc;
+use super::arc::Arc;
+use super::great_circle;
+use super::{is_unit, LatLongs, Point, Validate};
+use crate::latlong;
 use crate::trig::{Angle, Radians};
-use contracts::*;
+use contracts::{debug_invariant, debug_requires};
 use std::convert::From;
 
 /// An ordered collection of points and the poles (great circle arcs)
-/// between them. It corresponds to an OGC/GeoJSON LineString.  
+/// between them. It corresponds to an OGC/GeoJSON `LineString`.  
 /// If there are enough points (more than 3) and the last point is the
-/// same as the first point, then it corresponds to an OGC/GeoJSON LineLoop,
-/// i.e. a mathematical polygon. In which case the is_within function can
+/// same as the first point, then it corresponds to an OGC/GeoJSON `LineLoop`,
+/// i.e. a mathematical polygon. In which case the `is_within` function can
 /// be called to determine whether a point is within the polygon.
 #[derive(Clone, Debug, PartialEq)]
-pub struct Arc3dString {
+pub struct ArcString {
     /// The points.
-    points: Vec<Point3d>,
+    points: Vec<Point>,
     /// The poles of the great circle arcs.
-    poles: Vec<Point3d>,
+    poles: Vec<Point>,
     /// The lengths of the arcs, in radians.
     arc_lengths: Vec<Radians>,
 }
 
-impl Validate for Arc3dString {
-    /// Test whether an Arc3dString is valid, it must have more than one point.
+impl Validate for ArcString {
+    /// Test whether an `ArcString` is valid, it must have more than one point.
     fn is_valid(&self) -> bool {
         let count = self.points.len();
         1 < count
@@ -56,12 +57,13 @@ impl Validate for Arc3dString {
 }
 
 #[debug_invariant(self.is_valid())]
-impl Arc3dString {
-    /// Construct an Arc3dString
+impl ArcString {
+    /// Construct an ArcString
     /// * `points` - the points.
     /// * `poles` - the poles of the great circle arcs.
     /// * `arc_lengths` - the lengths of the arcs, in radians.
-    pub fn new(points: &[Point3d], poles: &[Point3d], arc_lengths: &[Radians]) -> Self {
+    #[must_use]
+    pub fn new(points: &[Point], poles: &[Point], arc_lengths: &[Radians]) -> Self {
         Self {
             points: points.to_vec(),
             poles: poles.to_vec(),
@@ -75,12 +77,12 @@ impl Arc3dString {
     }
 
     /// Accessor for the points.
-    pub fn points<'a>(&'a self) -> &[Point3d] {
+    pub fn points<'a>(&'a self) -> &[Point] {
         &self.points
     }
 
     /// Accessor for the great circle poles.
-    pub fn poles<'a>(&'a self) -> &[Point3d] {
+    pub fn poles<'a>(&'a self) -> &[Point] {
         &self.poles
     }
 
@@ -89,8 +91,8 @@ impl Arc3dString {
         &self.arc_lengths
     }
     /// The points in reverse order.
-    pub fn reverse(&self) -> Vec<Point3d> {
-        let mut points: Vec<Point3d> = self.points.to_vec();
+    pub fn reverse(&self) -> Vec<Point> {
+        let mut points: Vec<Point> = self.points.to_vec();
         points.reverse();
 
         points
@@ -98,8 +100,8 @@ impl Arc3dString {
 
     /// Get the arc at the given index.
     #[debug_requires(index < self.poles.len())]
-    pub fn arc(&self, index: usize) -> Arc3d {
-        Arc3d::new(
+    pub fn arc(&self, index: usize) -> Arc {
+        Arc::new(
             self.points[index],
             self.poles[index],
             self.arc_lengths[index + 1],
@@ -107,7 +109,7 @@ impl Arc3dString {
         )
     }
 
-    /// Determine whether the Arc3dString forms a closed loop,
+    /// Determine whether the ArcString forms a closed loop,
     /// i.e. is a polygon.
     ///
     /// returns true if it is a closed loop, false otherwise.
@@ -115,17 +117,17 @@ impl Arc3dString {
         (3 < self.count()) && (self.points.first() == self.points.last())
     }
 
-    /// Calculate the shortest distances between a point and the Arc3dString.
+    /// Calculate the shortest distances between a point and the ArcString.
     /// * `point` the point
     ///
     /// returns the shortest distances between the point and each line of the
-    /// Arc3dString.
-    pub fn shortest_distances(&self, point: &Point3d) -> Vec<Radians> {
+    /// ArcString.
+    pub fn shortest_distances(&self, point: &Point) -> Vec<Radians> {
         let size = self.count() - 1;
 
         let mut distances: Vec<Radians> = vec![Radians(0.0); size];
         for (index, distance_itr) in distances.iter_mut().enumerate().take(size) {
-            *distance_itr = calculate_shortest_distance(
+            *distance_itr = great_circle::calculate_shortest_distance(
                 &self.points[index],
                 &self.poles[index],
                 self.arc_lengths[index + 1],
@@ -136,12 +138,12 @@ impl Arc3dString {
         distances
     }
 
-    /// Find the index of the closest line on the Arc3dString to a point.
+    /// Find the index of the closest line on the ArcString to a point.
     /// * `point` the point
     ///
     /// returns the index of the closest line.
     #[debug_ensures(ret < self.count() - 1)]
-    pub fn closest_line_index(&self, point: &Point3d) -> usize {
+    pub fn closest_line_index(&self, point: &Point) -> usize {
         let distances = self.shortest_distances(point);
 
         // f64 doesn't support the Ord trait, so this won't work
@@ -162,8 +164,9 @@ impl Arc3dString {
     ///
     /// returns true if the point is abeam the arc, false otherwise.
     #[debug_requires(index < self.poles.len())]
-    pub fn is_abeam(&self, index: usize, point: &Point3d) -> bool {
-        let atd = along_track_distance(&self.points[index], &self.poles[index], point);
+    pub fn is_abeam(&self, index: usize, point: &Point) -> bool {
+        let atd =
+            great_circle::along_track_distance(&self.points[index], &self.poles[index], point);
 
         (0.0 <= atd.0) && (atd <= self.lengths()[index + 1])
     }
@@ -175,8 +178,8 @@ impl Arc3dString {
     /// returns the along and across track distances of the point relative to
     /// the arc at index.
     #[debug_requires(index < self.poles.len())]
-    pub fn line_atd_xtd(&self, index: usize, point: &Point3d) -> (Radians, Radians) {
-        calculate_atd_and_xtd(&self.points[index], &self.poles[index], point)
+    pub fn line_atd_xtd(&self, index: usize, point: &Point) -> (Radians, Radians) {
+        great_circle::calculate_atd_and_xtd(&self.points[index], &self.poles[index], point)
     }
 
     /// Calculate the index and ratio of a point relative to the Arc string.
@@ -184,7 +187,7 @@ impl Arc3dString {
     ///
     /// returns the index of the closest arc in the Arc string and the ratio of
     /// the point relative to the arc.
-    pub fn find_index_and_ratio(&self, point: &Point3d) -> (usize, f64) {
+    pub fn find_index_and_ratio(&self, point: &Point) -> (usize, f64) {
         let mut index = self.closest_line_index(point);
 
         let (atd, _xtd) = self.line_atd_xtd(index, point);
@@ -198,17 +201,17 @@ impl Arc3dString {
         (index, ratio)
     }
 
-    /// Calculate the distances where an arc intersects the Arc3dString.
+    /// Calculate the distances where an arc intersects the ArcString.
     /// * `arc` the arc
     ///
     /// returns the distances where the arc intersects the edges of the
-    /// Arc3dString. An empty vector if there are no intersections.
-    pub fn intersection_lengths(&self, arc: &Arc3d) -> Vec<Radians> {
+    /// ArcString. An empty vector if there are no intersections.
+    pub fn intersection_lengths(&self, arc: &Arc) -> Vec<Radians> {
         let size = self.count() - 1;
 
         let mut lengths: Vec<Radians> = vec![Radians(0.0); size];
         for (index, length_itr) in lengths.iter_mut().enumerate().take(size) {
-            *length_itr = calculate_intersection_length(arc, &self.arc(index));
+            *length_itr = arc::calculate_intersection_point_length(arc, &self.arc(index));
         }
 
         // Remove all values less than zero
@@ -217,14 +220,14 @@ impl Arc3dString {
         lengths
     }
 
-    /// Determine whether point is within a closed loop Arc3dString.  
+    /// Determine whether point is within a closed loop ArcString.  
     /// It determines whether point is within a polygon by summing winding
     /// numbers, see http://geomalgorithms.com/a03-_inclusion.html
     /// * `point` the point
     ///
-    /// returns true if point is within the closed loop Arc3dString, false otherwise.
+    /// returns true if point is within the closed loop ArcString, false otherwise.
     #[debug_requires(self.is_closed_loop() && is_unit(point))]
-    pub fn is_within(&self, point: &Point3d) -> bool {
+    pub fn is_within(&self, point: &Point) -> bool {
         let size = self.count() - 1;
 
         let mut values: Vec<i32> = vec![0; size];
@@ -241,12 +244,12 @@ impl Arc3dString {
     ///
     /// returns the point at index and ratio along the ArcString.
     #[debug_requires((index < self.poles.len()) && (0.0..1.0).contains(&ratio))]
-    pub fn point_at(&self, index: usize, ratio: f64) -> Point3d {
+    pub fn point_at(&self, index: usize, ratio: f64) -> Point {
         if 0.0 < ratio {
             let distance = Angle::from(Radians(ratio * self.arc_lengths[index + 1].0));
-            position(
+            great_circle::position(
                 &self.points[index],
-                &direction(&self.points[index], &self.poles[index]),
+                &great_circle::direction(&self.points[index], &self.poles[index]),
                 distance,
             )
         } else {
@@ -260,16 +263,15 @@ impl Arc3dString {
     ///
     /// returns the points in the subsection between start_index - start_ratio
     /// and finish_index - finish_ratio.
-    #[debug_requires((finish_index < self.poles.len()) && (start_index <= finish_index) &&
-    ((start_index as f64) + start_ratio) < ((finish_index as f64) + finish_ratio))]
+    #[debug_requires((finish_index < self.poles.len()) && (start_index <= finish_index))]
     pub fn subsection_points(
         &self,
         start_index: usize,
         start_ratio: f64,
         finish_index: usize,
         finish_ratio: f64,
-    ) -> Vec<Point3d> {
-        let mut points: Vec<Point3d> = [self.point_at(start_index, start_ratio)].to_vec();
+    ) -> Vec<Point> {
+        let mut points: Vec<Point> = [self.point_at(start_index, start_ratio)].to_vec();
 
         for index in start_index..finish_index {
             points.push(self.points[index + 1]);
@@ -283,28 +285,24 @@ impl Arc3dString {
     }
 }
 
-impl From<Vec<Point3d>> for Arc3dString {
-    #[debug_requires(!points.is_empty())]
-    fn from(points: Vec<Point3d>) -> Self {
-        let mut poles: Vec<Point3d> = Vec::with_capacity(points.len() - 1);
-        let mut arc_lengths: Vec<Radians> = vec![Radians(0.0); points.len()];
+impl From<&LatLongs> for ArcString {
+    #[debug_requires(!values.0.len() > 1)]
+    fn from(values: &LatLongs) -> Self {
+        let points = Vec::<Point>::from(values);
+        let mut poles: Vec<Point> = Vec::with_capacity(values.0.len() - 1);
+        let mut arc_lengths: Vec<Radians> = vec![Radians(0.0); values.0.len()];
 
-        let mut prev = points[0];
-        for index in 1..points.len() {
-            let next = points[index];
+        let mut prev = &values.0[0];
+        for (index, iter) in values.0.iter().enumerate().take(points.len()).skip(1) {
+            let (azimuth, length) = latlong::calculate_azimuth_and_distance(prev, iter);
+            poles.push(great_circle::calculate_pole(
+                prev.lat(),
+                prev.lon(),
+                azimuth,
+            ));
+            arc_lengths[index] = length;
 
-            let mut pole = prev.cross(&next);
-            // If the pole is not long enough to normalize,
-            // break out to invalidate the Arc3dString
-            if pole.norm() < MIN_LENGTH {
-                break;
-            }
-            pole.normalize_mut();
-            poles.push(pole);
-
-            arc_lengths[index] = gc_distance(&prev, &next);
-
-            prev = next;
+            prev = iter;
         }
 
         Self {
@@ -315,31 +313,34 @@ impl From<Vec<Point3d>> for Arc3dString {
     }
 }
 
-impl From<&[LatLon]> for Arc3dString {
-    #[debug_requires(!values.is_empty())]
-    fn from(values: &[LatLon]) -> Self {
-        Self::from(from_slice(values))
-    }
-}
-
-impl From<&LatLons> for Arc3dString {
-    #[debug_requires(!values.0.is_empty())]
-    fn from(values: &LatLons) -> Self {
-        Self::from(Vec::<Point3d>::from(values))
-    }
-}
-
 #[cfg(test)]
 mod tests {
-    use crate::sphere::arc3dstring::*;
+    use super::*;
+    use crate::latlong;
+    use crate::sphere::*;
+    use crate::trig::{Angle, Degrees};
 
     #[test]
-    fn test_short_arc_strings() {
+    fn test_short_arc_string() {
         let lats_1 = vec![45.0, 46.0];
         let lons_1 = vec![1.0, 1.0];
-        let lat_lons = LatLons::try_from((lats_1.as_slice(), lons_1.as_slice())).unwrap();
+        let lat_lons = LatLongs::try_from((lats_1.as_slice(), lons_1.as_slice())).unwrap();
 
-        let arc_string = Arc3dString::from(&lat_lons);
+        let points = Vec::<Point>::from(&lat_lons);
+        let mut poles: Vec<Point> = Vec::with_capacity(lat_lons.0.len() - 1);
+        let mut arc_lengths: Vec<Radians> = vec![Radians(0.0); lat_lons.0.len()];
+
+        let prev = lat_lons.0[0];
+        let next = lat_lons.0[1];
+        let (azimuth, length) = latlong::calculate_azimuth_and_distance(&prev, &next);
+        poles.push(great_circle::calculate_pole(
+            prev.lat(),
+            prev.lon(),
+            azimuth,
+        ));
+        arc_lengths[1] = length;
+
+        let arc_string = ArcString::new(&points, &poles, &arc_lengths);
         assert!(arc_string.is_valid());
         assert!(!arc_string.is_closed_loop());
         assert_eq!(arc_string.poles().len(), arc_string.count() - 1);
@@ -353,9 +354,9 @@ mod tests {
     fn test_short_arc_string_1() {
         let lats = vec![44.0, 46.0, 46.0, 44.0];
         let lons = vec![1.0, 1.0, -1.0, -1.0];
-        let lat_lons = LatLons::try_from((lats.as_slice(), lons.as_slice())).unwrap();
+        let lat_lons = LatLongs::try_from((lats.as_slice(), lons.as_slice())).unwrap();
 
-        let arc_string = Arc3dString::from(&lat_lons);
+        let arc_string = ArcString::from(&lat_lons);
         assert!(arc_string.is_valid());
         assert!(!arc_string.is_closed_loop());
         assert_eq!(arc_string.poles().len(), arc_string.count() - 1);
@@ -372,7 +373,7 @@ mod tests {
         // Arc East of arc_string
         let pos_43_2 = to_sphere(Angle::from(Degrees(43.0)), Angle::from(Degrees(2.0)));
         let pos_47_2 = to_sphere(Angle::from(Degrees(47.0)), Angle::from(Degrees(2.0)));
-        let arc_1 = Arc3d::between_points(&pos_43_2, &pos_47_2);
+        let arc_1 = Arc::between_points(&pos_43_2, &pos_47_2);
         assert!(arc_1.is_valid());
 
         let values_01 = arc_string.shortest_distances(&pos_43_2);
@@ -387,7 +388,7 @@ mod tests {
         // Arc through centre of arc_string, note NOT a closed loop
         let pos_43_0 = to_sphere(Angle::from(Degrees(43.0)), Angle::default());
         let pos_47_0 = to_sphere(Angle::from(Degrees(47.0)), Angle::default());
-        let arc_2 = Arc3d::between_points(&pos_43_0, &pos_47_0);
+        let arc_2 = Arc::between_points(&pos_43_0, &pos_47_0);
         assert!(arc_2.is_valid());
 
         let values_02 = arc_string.shortest_distances(&pos_43_0);
@@ -400,7 +401,7 @@ mod tests {
 
         let (atd0, xtd0) = arc_string.line_atd_xtd(0, &pos_43_0);
         assert_eq!(-0.017377319412642603, atd0.0);
-        assert_eq!(0.01276422865037213, xtd0.0);
+        assert_eq!(0.012764228650372139, xtd0.0);
 
         let values_03 = arc_string.shortest_distances(&pos_47_0);
         assert_eq!(3, values_03.len());
@@ -411,12 +412,12 @@ mod tests {
         assert!(!arc_string.is_abeam(2, &pos_47_0));
 
         let (atd1, xtd1) = arc_string.line_atd_xtd(1, &pos_47_0);
-        assert_eq!(0.012123757216859347, atd1.0);
-        assert_eq!(-0.017377180894479542, xtd1.0);
+        assert_eq!(0.012123757216859345, atd1.0);
+        assert_eq!(-0.017377180894479597, xtd1.0);
 
         let (index1, ratio1) = arc_string.find_index_and_ratio(&pos_47_0);
         assert_eq!(1, index1);
-        assert_eq!(0.5000000000000001, ratio1);
+        assert_eq!(0.5, ratio1);
 
         let values_2 = arc_string.intersection_lengths(&arc_2);
         assert_eq!(1, values_2.len());
@@ -424,12 +425,12 @@ mod tests {
         // Arc South of arc_string
         let pos_33_0 = to_sphere(Angle::from(Degrees(33.0)), Angle::default());
         let pos_37_0 = to_sphere(Angle::from(Degrees(37.0)), Angle::default());
-        let arc_3 = Arc3d::between_points(&pos_33_0, &pos_37_0);
+        let arc_3 = Arc::between_points(&pos_33_0, &pos_37_0);
         assert!(arc_3.is_valid());
 
         let (index2, ratio2) = arc_string.find_index_and_ratio(&pos_33_0);
         assert_eq!(0, index2);
-        assert_eq!(-5.498006790057533, ratio2);
+        assert_eq!(-5.498006790057523, ratio2);
 
         let values_3 = arc_string.intersection_lengths(&arc_3);
         assert_eq!(0, values_3.len());
@@ -443,9 +444,9 @@ mod tests {
         // A closed rectangle in Lat Long coords
         let rect_lats = vec![44.0, 46.0, 46.0, 44.0, 44.0];
         let rect_lons = vec![1.0, 1.0, -1.0, -1.0, 1.0];
-        let lat_lons = LatLons::try_from((rect_lats.as_slice(), rect_lons.as_slice())).unwrap();
+        let lat_lons = LatLongs::try_from((rect_lats.as_slice(), rect_lons.as_slice())).unwrap();
 
-        let polygon = Arc3dString::from(&lat_lons);
+        let polygon = ArcString::from(&lat_lons);
         assert!(polygon.is_valid());
         assert!(polygon.is_closed_loop());
         assert_eq!(polygon.poles().len(), polygon.count() - 1);
@@ -454,8 +455,8 @@ mod tests {
         let points_lats = vec![44.0, 46.0, 45.0, 45.0];
         let points_lons = vec![0.0, 0.0, 1.0, -1.0];
         let points_lat_lons =
-            LatLons::try_from((points_lats.as_slice(), points_lons.as_slice())).unwrap();
-        let points = Vec::<Point3d>::from(&points_lat_lons);
+            LatLongs::try_from((points_lats.as_slice(), points_lons.as_slice())).unwrap();
+        let points = Vec::<Point>::from(&points_lat_lons);
 
         // lower rhumb line is outside
         assert!(!polygon.is_within(&points[0]));
@@ -471,8 +472,8 @@ mod tests {
         let points1_lats = vec![43.0, 47.0];
         let points1_lons = vec![2.0, 2.0];
         let points1_lat_lons =
-            LatLons::try_from((points1_lats.as_slice(), points1_lons.as_slice())).unwrap();
-        let arc_1 = Arc3d::from(points1_lat_lons.0.as_slice());
+            LatLongs::try_from((points1_lats.as_slice(), points1_lons.as_slice())).unwrap();
+        let arc_1 = Arc::between_positions(&points1_lat_lons.0[0], &points1_lat_lons.0[1]);
         assert!(arc_1.is_valid());
 
         let values_1 = polygon.intersection_lengths(&arc_1);
@@ -482,8 +483,8 @@ mod tests {
         let points2_lats = vec![43.0, 47.0];
         let points2_lons = vec![0.0, 0.0];
         let points2_lat_lons =
-            LatLons::try_from((points2_lats.as_slice(), points2_lons.as_slice())).unwrap();
-        let arc_2 = Arc3d::from(points2_lat_lons.0.as_slice());
+            LatLongs::try_from((points2_lats.as_slice(), points2_lons.as_slice())).unwrap();
+        let arc_2 = Arc::between_positions(&points2_lat_lons.0[0], &points2_lat_lons.0[1]);
         assert!(arc_2.is_valid());
 
         let values_2 = polygon.intersection_lengths(&arc_2);
@@ -493,8 +494,8 @@ mod tests {
         let points3_lats = vec![33.0, 37.0];
         let points3_lons = vec![0.0, 0.0];
         let points3_lat_lons =
-            LatLons::try_from((points3_lats.as_slice(), points3_lons.as_slice())).unwrap();
-        let arc_3 = Arc3d::from(points3_lat_lons.0.as_slice());
+            LatLongs::try_from((points3_lats.as_slice(), points3_lons.as_slice())).unwrap();
+        let arc_3 = Arc::between_positions(&points3_lat_lons.0[0], &points3_lat_lons.0[1]);
         assert!(arc_3.is_valid());
 
         let values_3 = polygon.intersection_lengths(&arc_3);
@@ -506,9 +507,9 @@ mod tests {
         // A closed rectangle in Lat Long coords around the International Date Line
         let rect_lats = vec![-44.0, -46.0, -46.0, -44.0, -44.0];
         let rect_lons = vec![-179.0, -179.0, 179.0, 179.0, -179.0];
-        let lat_lons = LatLons::try_from((rect_lats.as_slice(), rect_lons.as_slice())).unwrap();
+        let lat_lons = LatLongs::try_from((rect_lats.as_slice(), rect_lons.as_slice())).unwrap();
 
-        let polygon = Arc3dString::from(&lat_lons);
+        let polygon = ArcString::from(&lat_lons);
         assert!(polygon.is_valid());
         assert!(polygon.is_closed_loop());
         assert_eq!(polygon.poles().len(), polygon.count() - 1);
@@ -517,8 +518,8 @@ mod tests {
         let points_lats = vec![-44.0, -46.0, -45.0, -45.0];
         let points_lons = vec![180.0, 180.0, -179.0, 179.0];
         let points_lat_lons =
-            LatLons::try_from((points_lats.as_slice(), points_lons.as_slice())).unwrap();
-        let points = Vec::<Point3d>::from(&points_lat_lons);
+            LatLongs::try_from((points_lats.as_slice(), points_lons.as_slice())).unwrap();
+        let points = Vec::<Point>::from(&points_lat_lons);
 
         // lower rhumb line is outside
         assert!(!polygon.is_within(&points[0]));
@@ -536,9 +537,9 @@ mod tests {
         // A closed rectangle in Lat Long coords West of the Greenwich meridian
         let rect_lats = vec![-44.0, -46.0, -46.0, -44.0, -44.0];
         let rect_lons = vec![-160.0, -160.0, -150.0, -150.0, -160.0];
-        let lat_lons = LatLons::try_from((rect_lats.as_slice(), rect_lons.as_slice())).unwrap();
+        let lat_lons = LatLongs::try_from((rect_lats.as_slice(), rect_lons.as_slice())).unwrap();
 
-        let polygon = Arc3dString::from(&lat_lons);
+        let polygon = ArcString::from(&lat_lons);
         assert!(polygon.is_valid());
         assert!(polygon.is_closed_loop());
         assert_eq!(polygon.poles().len(), polygon.count() - 1);
@@ -547,8 +548,8 @@ mod tests {
         let points_lats = vec![-44.0, -46.0, -44.0, -46.0];
         let points_lons = vec![-155.0, -155.0, -160.0, -150.0];
         let points_lat_lons =
-            LatLons::try_from((points_lats.as_slice(), points_lons.as_slice())).unwrap();
-        let points = Vec::<Point3d>::from(&points_lat_lons);
+            LatLongs::try_from((points_lats.as_slice(), points_lons.as_slice())).unwrap();
+        let points = Vec::<Point>::from(&points_lat_lons);
 
         // lower rhumb line is outside
         assert!(!polygon.is_within(&points[0]));
@@ -562,9 +563,9 @@ mod tests {
         let route_lons = vec![
             -3.0, -2.0, -1.0, -1.0, 1.0, 0.0, 3.0, 2.0, 5.0, 4.0, 4.0, 4.0,
         ];
-        let lat_lons = LatLons::try_from((route_lats.as_slice(), route_lons.as_slice())).unwrap();
+        let lat_lons = LatLongs::try_from((route_lats.as_slice(), route_lons.as_slice())).unwrap();
 
-        let arc_string = Arc3dString::from(&lat_lons);
+        let arc_string = ArcString::from(&lat_lons);
         assert!(arc_string.is_valid());
         assert!(!arc_string.is_closed_loop());
         assert_eq!(arc_string.poles().len(), arc_string.count() - 1);

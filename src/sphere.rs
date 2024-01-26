@@ -1,4 +1,4 @@
-// Copyright (c) 2020-2023 Via Technology Ltd. All Rights Reserved.
+// Copyright (c) 2020-2024 Via Technology Ltd. All Rights Reserved.
 
 // Permission is hereby granted, free of charge, to any person obtaining a copy
 // of this software and associated documentation files (the "Software"),
@@ -21,663 +21,435 @@
 //! The sphere module contains types and functions for calculating distances
 //! and azimuths between points on the surface of a sphere.
 
-pub mod arc3d;
-pub mod arc3dstring;
-pub mod great_circle3d;
-pub mod point3d;
+pub mod arc;
+pub mod arcstring;
+pub mod great_circle;
 
-use super::trig::{
-    from_degrees, valid_latitudes, valid_longitudes, Angle, Degrees, Radians, UnitNegRange,
-};
-use super::{clamp, Validate};
-use contracts::*;
-use serde::{Deserialize, Serialize};
-use std::convert::{From, TryFrom};
+extern crate nalgebra as na;
+use crate::is_small;
+use crate::latlong::{LatLong, LatLongs};
+use crate::trig;
+use crate::trig::{Angle, Radians, UnitNegRange};
+use crate::Validate;
+use contracts::{debug_ensures, debug_requires};
 
-/// Calculates the length of the adjacent side of a right angled
-/// spherical triangle, given the angle and length of the hypotenuse.
-#[debug_requires((0.0..std::f64::consts::FRAC_PI_2).contains(&length.0))]
-pub fn spherical_cosine_rule(cos_angle: f64, length: Radians) -> Radians {
-    Radians(libm::atan(cos_angle * libm::tan(length.0)))
-}
+/// A Point is a nalgebra Vector3.
+pub type Point = na::Vector3<f64>;
 
-/// Convert a Euclidean distance to a Great Circle distance (in radians).
-/// e should satisfy: 0 <= e <= 2, if not it is clamped into range.
-#[debug_requires(0.0 <= e)] // don't test e <= 2, due to floating point maths issues
-#[debug_ensures((0.0..=std::f64::consts::PI).contains(&ret.0))]
-pub fn e2gc_distance(e: f64) -> Radians {
-    Radians(2.0 * libm::asin(UnitNegRange::clamp(0.5 * e).0))
-}
+/// The square of `std::f64::EPSILON`.
+pub const SQ_EPSILON: f64 = std::f64::EPSILON * std::f64::EPSILON;
 
-/// Convert a Great Circle distance (in radians) to a Euclidean distance.
-#[debug_requires((0.0..=std::f64::consts::PI).contains(&gc.0))]
-#[debug_ensures((0.0..=2.0).contains(&ret))]
-pub fn gc2e_distance(gc: Radians) -> f64 {
-    2.0 * libm::sin(0.5 * gc.0)
-}
+/// The minimum length of a vector to normalize.
+pub const MIN_LENGTH: f64 = 16384.0 * std::f64::EPSILON;
 
-/// Calculate the square of the Euclidean distance (i.e. using Pythagoras)
-/// between two points from their Latitudes and their Longitude difference.
-/// * `lat_a` - start point Latitude.
-/// * `lat_b` - finish point Latitude.
-/// * `delta_long` - Longitude difference between start and finish points.
+/// The minimum norm of a vector to normalize.
+pub const MIN_NORM: f64 = MIN_LENGTH * MIN_LENGTH;
+
+/// Create a Point from latitude and longitude
+/// @pre |lat| <= 90.0 degrees.
+/// * `lat` - the latitude.
+/// * `lon` - the longitude.
 ///
-/// returns the square of the Euclidean distance between the points.
-#[debug_ensures((0.0..=4.0).contains(&ret))]
-pub fn sq_euclidean_distance(lat_a: Angle, lat_b: Angle, delta_long: Angle) -> f64 {
-    let delta_x = lat_b.cos() * delta_long.cos() - lat_a.cos();
-    let delta_y = lat_b.cos() * delta_long.sin();
-    let delta_z = lat_b.sin() - lat_a.sin();
-
-    let result = delta_x * delta_x + delta_y * delta_y + delta_z * delta_z;
-    clamp(result, 0.0, 4.0)
+/// returns a Point on the unit sphere.
+#[debug_requires(lat.is_valid_latitude())]
+#[debug_ensures(ret.is_valid())]
+pub fn to_sphere(lat: Angle, lon: Angle) -> Point {
+    Point::new(lat.cos() * lon.cos(), lat.cos() * lon.sin(), lat.sin())
 }
 
-/// Calculate the Great Circle distance (angle from centre) between two points
-/// from their Latitudes and their Longitude difference.
-/// This function is more accurate than haversine_distance.
-/// * `lat_a` - start point Latitude.
-/// * `lat_b` - finish point Latitude.
-/// * `delta_long` - Longitude difference between start and finish points.
+impl From<&LatLong> for Point {
+    /// Convert a `LatLong` to a Point on the unit sphere
+    fn from(value: &LatLong) -> Self {
+        to_sphere(value.lat(), value.lon())
+    }
+}
+
+/// Calculate the latitude of a Point.
+#[debug_requires(a.is_valid())]
+#[debug_ensures(ret.is_valid_latitude())]
+pub fn latitude(a: &Point) -> Angle {
+    let sin_a = UnitNegRange(a.z);
+    Angle::new(sin_a, trig::swap_sin_cos(sin_a))
+}
+
+/// Calculate the longitude of a Point.
+#[debug_requires(a.is_valid())]
+pub fn longitude(a: &Point) -> Angle {
+    Angle::from_y_x(a.y, a.x)
+}
+
+impl From<&Point> for LatLong {
+    /// Convert a Point to a`LatLong`  
+    fn from(value: &Point) -> Self {
+        Self::new(latitude(value), longitude(value))
+    }
+}
+
+/// Determine whether a Point is a unit vector.
 ///
-/// returns the Great Circle distance between the points in Radians.
-pub fn calculate_gc_distance(lat_a: Angle, lat_b: Angle, delta_long: Angle) -> Radians {
-    e2gc_distance(libm::sqrt(sq_euclidean_distance(lat_a, lat_b, delta_long)))
+/// returns true if Point is a unit vector, false otherwise.
+#[must_use]
+pub fn is_unit(a: &Point) -> bool {
+    const MIN_POINT_SQ_LENGTH: f64 = 1.0 - 12.0 * std::f64::EPSILON;
+    const MAX_POINT_SQ_LENGTH: f64 = 1.0 + 12.0 * std::f64::EPSILON;
+
+    (MIN_POINT_SQ_LENGTH..=MAX_POINT_SQ_LENGTH).contains(&(a.norm()))
 }
 
-/// Calculate the Great Circle distance (angle from centre) between two points
-/// from their Latitudes and their Longitude difference.
-/// This function is less accurate than calculate_gc_distance.
-/// * `lat_a` - start point Latitude.
-/// * `lat_b` - finish point Latitude.
-/// * `delta_long` - Longitude difference between start and finish points.
-///
-/// returns the Great Circle distance between the points in Radians.
-pub fn haversine_distance(lat_a: Angle, lat_b: Angle, delta_long: Angle) -> Radians {
-    let delta_lat = lat_b - lat_a;
-    let haversine_lat = delta_lat.sq_sine_half();
-    let haversine_lon = delta_long.sq_sine_half();
-
-    let a = clamp(
-        haversine_lat + lat_a.cos() * lat_b.cos() * haversine_lon,
-        0.0,
-        1.0,
-    );
-
-    Radians(2.0 * libm::asin(libm::sqrt(a)))
-}
-
-/// Calculate the azimuth (bearing) along the great circle of point b from
-/// point a from their Latitudes and their Longitude difference.
-/// * `lat_a` - start point Latitude.
-/// * `lat_b` - finish point Latitude.
-/// * `delta_long` - Longitude difference between start and finish points.
-///
-/// returns the Great Circle azimuth relative to North of point b from point a
-/// as an Angle.
-pub fn calculate_gc_azimuth(lat_a: Angle, lat_b: Angle, delta_long: Angle) -> Angle {
-    let sin_azimuth = lat_b.cos() * delta_long.sin();
-    let temp = (lat_a.sin() * lat_b.cos() * delta_long.sin() * delta_long.sin())
-        / (1.0 + libm::fabs(delta_long.cos()));
-    let cos_azimuth = if delta_long.cos() < 0.0 {
-        lat_b.sin() * lat_a.cos() + lat_a.sin() * lat_b.cos() - temp
-    } else {
-        lat_b.sin() * lat_a.cos() - lat_a.sin() * lat_b.cos() + temp
-    };
-
-    Angle::from_y_x(sin_azimuth, cos_azimuth)
-}
-
-/// Calculate the azimuth and distance along the great circle of point b from
-/// point a from their Latitudes and their Longitude difference.
-/// * `lat_a` - start point Latitude.
-/// * `lat_b` - finish point Latitude.
-/// * `delta_long` - Longitude difference between start and finish points.
-///
-/// returns the Great Circle azimuth relative to North and distance of point b
-/// from point a.
-pub fn calculate_gc_azimuth_distance(
-    lat_a: Angle,
-    lat_b: Angle,
-    delta_long: Angle,
-) -> (Angle, Radians) {
-    let azimuth = calculate_gc_azimuth(lat_a, lat_b, delta_long);
-    let distance = calculate_gc_distance(lat_a, lat_b, delta_long);
-    (azimuth, distance)
-}
-
-/// A position as a latitude and longitude pair.
-#[derive(Clone, Copy, Debug, PartialEq, Serialize, Deserialize)]
-pub struct LatLon {
-    lat: Angle,
-    lon: Angle,
-}
-
-impl Validate for LatLon {
-    /// Test whether a LatLon is valid.  
-    /// I.e. whether the latitude lies in the range: -90.0 <= value <= 90.0
+impl Validate for Point {
+    /// Test whether a Point is valid.  
+    /// I.e. whether the Point is a unit vector.
     fn is_valid(&self) -> bool {
-        self.lat.is_valid_latitude() && self.lon.is_valid()
+        is_unit(self)
     }
 }
 
-#[debug_invariant(self.is_valid())]
-impl LatLon {
-    pub fn new(lat: Angle, lon: Angle) -> Self {
-        Self { lat, lon }
-    }
-
-    pub fn lat(&self) -> Angle {
-        self.lat
-    }
-
-    pub fn lon(&self) -> Angle {
-        self.lon
-    }
-}
-
-impl From<&LatLon> for point3d::Point3d {
-    /// Convert a LatLon to a Point3d on the unit sphere
-    fn from(value: &LatLon) -> point3d::Point3d {
-        point3d::Point3d::new(
-            value.lat.cos() * value.lon.cos(),
-            value.lat.cos() * value.lon.sin(),
-            value.lat.sin(),
-        )
-    }
-}
-
-/// Convert a slice of LatLon to a Vec of Point3d on the unit sphere
-pub fn from_slice(values: &[LatLon]) -> Vec<point3d::Point3d> {
-    values.iter().map(|v| v.into()).collect()
-}
-
-impl From<&LatLon> for (f64, f64) {
-    /// Convert a LatLon to a Latitude, Longitude pair in degrees
-    fn from(value: &LatLon) -> (f64, f64) {
-        (Degrees::from(value.lat).0, Degrees::from(value.lon).0)
-    }
-}
-
-impl From<&LatLon> for Vec<f64> {
-    /// Convert a LatLon to a geojson PointType or Position
-    fn from(value: &LatLon) -> Vec<f64> {
-        vec![Degrees::from(value.lon).0, Degrees::from(value.lat).0]
-    }
-}
-
-impl From<&point3d::Point3d> for LatLon {
-    /// Create a LatLon from a Point3d.  
-    fn from(value: &point3d::Point3d) -> Self {
-        Self::new(point3d::latitude(value), point3d::longitude(value))
-    }
-}
-
-impl TryFrom<(f64, f64)> for LatLon {
-    type Error = &'static str;
-
-    /// Attempt to convert a pair of f64 values in Latitude, Longitude order.
-    fn try_from(item: (f64, f64)) -> Result<Self, Self::Error> {
-        let lat = Degrees(item.0);
-        let lon = Degrees(item.1);
-        if lat.is_valid_latitude() {
-            Ok(LatLon::new(Angle::from(lat), Angle::from(lon)))
-        } else {
-            Err("invalid latitude")
-        }
-    }
-}
-
-impl TryFrom<&[f64]> for LatLon {
-    type Error = &'static str;
-
-    /// Attempt to convert a slice of f64 values in Longitude, Latitude order.
-    /// To convert a geojson PointType or Position to a LatLon.
-    fn try_from(item: &[f64]) -> Result<Self, Self::Error> {
-        if item.len() == 2 {
-            // Note: order reversed for geojson
-            Self::try_from((item[1], item[0]))
-        } else {
-            Err("not 2 values")
-        }
-    }
-}
-
-/// Calculate the azimuth and distance along the great circle of point b from
-/// point a.
-/// * `a` - start point.
-/// * `b` - finish point.
+/// Determine whether point a is West of point b.  
+/// It calculates and compares the perp product of the two points.
+/// * `a`, `b` - the points.
 ///
-/// returns the Great Circle azimuth relative to North and distance of point b
-/// from point a.
-pub fn calc_gc_azimuth_distance(a: LatLon, b: LatLon) -> (Angle, Radians) {
-    let delta_long = b.lon() - a.lon();
-    calculate_gc_azimuth_distance(a.lat(), b.lat(), delta_long)
+/// returns true if a is West of b, false otherwise.
+#[must_use]
+pub fn is_west_of(a: &Point, b: &Point) -> bool {
+    // Compare with -epsilon to handle floating point errors
+    b.xy().perp(&a.xy()) <= -std::f64::EPSILON
 }
 
-/// A collection of positions as a latitude and longitude pairs.
-#[derive(Clone, Debug, Default, PartialEq)]
-pub struct LatLons(pub Vec<LatLon>);
-
-impl LatLons {
-    pub fn new(lats: &[Angle], lons: &[Angle]) -> Self {
-        assert!((1 < lats.len()) && (lats.len() == lons.len()));
-        LatLons(
-            lats.iter()
-                .zip(lons.iter())
-                .map(|(&lat, &lon)| LatLon::new(lat, lon))
-                .collect(),
-        )
-    }
-
-    /// Determine whether the LatLons form a closed loop,
-    /// i.e. is a polygon.
-    ///
-    /// returns true if it is a closed loop, false otherwise.
-    pub fn is_closed_loop(&self) -> bool {
-        (3 < self.0.len()) && (self.0.first() == self.0.last())
-    }
+/// Calculate the relative longitude of point a from point b.
+/// * `a`, `b` - the points.
+///
+/// returns the relative longitude of point a from point b,
+/// negative if a is West of b, positive otherwise.
+#[debug_requires(a.is_valid() && b.is_valid())]
+#[must_use]
+pub fn delta_longitude(a: &Point, b: &Point) -> Angle {
+    let a_lon = a.xy();
+    let b_lon = b.xy();
+    Angle::from_y_x(b_lon.perp(&a_lon), b_lon.dot(&a_lon))
 }
 
-impl TryFrom<(&[f64], &[f64])> for LatLons {
-    type Error = &'static str;
-    /// Attempt to convert a pair of f64 slices of values in Latitude, Longitude order.
-    fn try_from(values: (&[f64], &[f64])) -> Result<LatLons, Self::Error> {
-        let lats = values.0;
-        let lons = values.1;
+/// Determine whether two Points are orthogonal (perpendicular).
+///
+/// returns true if a and b are orthogonal, false otherwise.
+#[debug_requires(a.is_valid() && b.is_valid())]
+#[must_use]
+pub fn are_orthogonal(a: &Point, b: &Point) -> bool {
+    const MAX_LENGTH: f64 = 4.0 * std::f64::EPSILON;
 
-        if !lats.is_empty()
-            && lats.len() == lons.len()
-            && valid_latitudes(lats)
-            && valid_longitudes(lons)
-        {
-            let lats_angles = from_degrees(lats);
-            let lons_angles = from_degrees(lons);
-            Ok(LatLons::new(lats_angles.as_slice(), lons_angles.as_slice()))
-        } else {
-            Err("lats and/or lons not valid to combine")
+    (-MAX_LENGTH..=MAX_LENGTH).contains(&(a.dot(b)))
+}
+
+/// Calculate the winding number of a point against the edge of a polygon.  
+/// It determines whether the polygon edge lies between the point and the
+/// North or South pole and then calculates the winding number based upon
+/// whether the point is North of the edge, see
+/// http://geomalgorithms.com/a03-_inclusion.html
+/// * `a`, `b` the start and end points of the edge.
+/// * `pole` the pole of the great circle of the edge.
+/// * `point` the point to compare.
+///
+/// returns 1 if the point is North of the edge, -1 if the point is South of
+/// the edge, 0 otherwise.
+#[debug_requires(a.is_valid() && pole.is_valid() && b.is_valid() && point.is_valid()
+            && are_orthogonal(a, pole) && are_orthogonal(b, pole))]
+#[must_use]
+pub fn winding_number(a: &Point, pole: &Point, b: &Point, point: &Point) -> i32 {
+    // if point is East of (or at same longitude as) a
+    if is_west_of(point, a) {
+        // point is West of a
+        // and East of (or at same longitude as) b and North of the edge
+        if !is_west_of(point, b) && (pole.dot(point) < 0.0) {
+            return -1;
+        }
+    } else {
+        // and West of b and North of the edge
+        if is_west_of(point, b) && (0.0 < pole.dot(point)) {
+            return 1;
         }
     }
+
+    0
 }
 
-fn try_from_geojson_linestring(values: &[Vec<f64>]) -> Result<Vec<LatLon>, &'static str> {
-    values
-        .iter()
-        .map(|v| LatLon::try_from(v.as_slice()))
-        .collect()
+/// Calculate the square of the Euclidean distance between two Points.
+/// Note: points do NOT need to be valid Points.
+/// @post for unit vectors: result <= 4
+#[debug_ensures(0.0 <= ret)]
+#[must_use]
+pub fn sq_distance(a: &Point, b: &Point) -> f64 {
+    (b - a).norm_squared()
 }
 
-impl TryFrom<&[Vec<f64>]> for LatLons {
-    type Error = &'static str;
+/// Calculate the shortest (Euclidean) distance between two Points.
+/// @post for unit vectors: result <= 2
+#[debug_ensures(0.0 <= ret)]
+#[must_use]
+pub fn distance(a: &Point, b: &Point) -> f64 {
+    (b - a).norm()
+}
 
-    fn try_from(values: &[Vec<f64>]) -> Result<LatLons, Self::Error> {
-        Ok(LatLons(try_from_geojson_linestring(values)?))
+/// Calculate the Great Circle distance (in radians) between two points.
+#[debug_requires(is_unit(a) && is_unit(b))]
+#[debug_ensures(libm::fabs(ret.0) <= std::f64::consts::PI)]
+#[must_use]
+pub fn gc_distance(a: &Point, b: &Point) -> Radians {
+    trig::e2gc_distance(distance(a, b))
+}
+
+/// Calculate the Great Circle distance (as an Angle) between two points.
+#[debug_requires(a.is_valid() && b.is_valid())]
+#[must_use]
+pub fn gc_distance_angle(a: &Point, b: &Point) -> Angle {
+    let d_2 = UnitNegRange::clamp(0.5 * distance(a, b));
+    let gc_d_2 = Angle::new(d_2, trig::swap_sin_cos(d_2));
+    gc_d_2.x2()
+}
+
+/// Calculate an intersection point between the poles of two Great Circles
+/// * `pole1`, `pole2` the poles.
+///
+/// return an intersection point or None if the poles are the same (or opposing) Great Circles.
+#[must_use]
+pub fn calculate_intersection_point(pole1: &Point, pole2: &Point) -> Option<Point> {
+    let c = pole1.cross(pole2);
+    if is_small(c.norm(), MIN_NORM) {
+        None
+    } else {
+        Some(c.normalize())
     }
 }
 
-impl From<&LatLons> for Vec<point3d::Point3d> {
-    /// Convert LatLons to a vector of Point3ds on the unit sphere
-    fn from(value: &LatLons) -> Vec<point3d::Point3d> {
+/// Convert a slice of `LatLongs` to a Vec of Point on the unit sphere
+#[must_use]
+pub fn from_slice(values: &[LatLong]) -> Vec<Point> {
+    values.iter().map(std::convert::Into::into).collect()
+}
+
+impl From<&LatLongs> for Vec<Point> {
+    /// Convert `LatLongs` to a vector of Points on the unit sphere
+    fn from(value: &LatLongs) -> Self {
         from_slice(&value.0)
-    }
-}
-
-impl From<&LatLons> for Vec<Vec<f64>> {
-    /// Convert a LatLons to a geojson LineString
-    fn from(value: &LatLons) -> Vec<Vec<f64>> {
-        value.0.iter().map(|v| v.into()).collect::<Vec<_>>()
-    }
-}
-
-/// A collection of LatLons.
-#[derive(Clone, Debug, Default, PartialEq)]
-pub struct MultiLatLons(pub Vec<LatLons>);
-
-fn try_from_geojson_multi_line_string(
-    values: &[Vec<Vec<f64>>],
-) -> Result<Vec<LatLons>, &'static str> {
-    values
-        .iter()
-        .map(|v| LatLons::try_from(v.as_slice()))
-        .collect()
-}
-
-impl TryFrom<&[Vec<Vec<f64>>]> for MultiLatLons {
-    type Error = &'static str;
-
-    fn try_from(values: &[Vec<Vec<f64>>]) -> Result<MultiLatLons, Self::Error> {
-        Ok(MultiLatLons(try_from_geojson_multi_line_string(values)?))
-    }
-}
-
-impl From<&MultiLatLons> for Vec<Vec<Vec<f64>>> {
-    /// Convert a MultiLatLons to a geojson MultiLineString / Polygon
-    fn from(value: &MultiLatLons) -> Vec<Vec<Vec<f64>>> {
-        value.0.iter().map(|v| v.into()).collect::<Vec<_>>()
     }
 }
 
 #[cfg(test)]
 mod tests {
-    use crate::sphere::*;
-    use crate::trig::DEG2RAD;
-
-    use serde_json::to_string;
+    use super::*;
+    use crate::trig::{from_degrees, Angle, Degrees, Radians};
 
     #[test]
-    fn test_distance_functions() {
-        assert_eq!(std::f64::consts::PI, e2gc_distance(2.1).0);
-        let delta_angle = std::f64::consts::FRAC_PI_2 - e2gc_distance(std::f64::consts::SQRT_2).0;
-        assert!(delta_angle < std::f64::EPSILON);
+    fn test_point_lat_longs() {
+        let zero = Angle::from_y_x(0.0, 1.0);
+        let ninety = Angle::from(Degrees(90.0));
+        let one_eighty = Angle::from(Degrees(180.0));
 
-        assert_eq!(2.0, gc2e_distance(Radians(std::f64::consts::PI)));
-        let delta_dist =
-            std::f64::consts::SQRT_2 - gc2e_distance(Radians(std::f64::consts::FRAC_PI_2));
-        assert!(delta_dist <= std::f64::EPSILON);
+        let lat_lon_south = LatLong::new(-ninety, one_eighty);
+        let point_south = Point::from(&lat_lon_south);
+
+        let result = LatLong::from(&point_south);
+        assert_eq!(Degrees::from(-ninety), Degrees::from(result.lat()));
+        // Note: longitude is now zero, since the poles do not have a Longitude
+        assert_eq!(Degrees::from(zero), Degrees::from(result.lon()));
+
+        // Test Greenwich equator
+        let lat_lon_0_0 = LatLong::new(zero, zero);
+        let point_0 = Point::from(&lat_lon_0_0);
+        assert!(is_unit(&point_0));
+        assert_eq!(lat_lon_0_0, LatLong::from(&point_0));
+
+        // Test IDL equator
+        let lat_lon_0_180 = LatLong::new(zero, one_eighty);
+        let point_1 = Point::from(&lat_lon_0_180);
+        assert!(is_unit(&point_1));
+        assert_eq!(lat_lon_0_180, LatLong::from(&point_1));
+
+        assert_eq!(false, is_west_of(&point_0, &point_1));
+        assert_eq!(
+            one_eighty.to_radians().0,
+            libm::fabs(delta_longitude(&point_0, &point_1).to_radians().0)
+        );
+
+        let lat_lon_0_m180 = LatLong::new(zero, -one_eighty);
+        let point_2 = Point::from(&lat_lon_0_m180);
+        assert!(is_unit(&point_2));
+        assert_eq!(lat_lon_0_m180, LatLong::from(&point_2));
+
+        assert_eq!(false, is_west_of(&point_0, &point_2));
+        assert_eq!(
+            -one_eighty.to_radians(),
+            delta_longitude(&point_0, &point_2).to_radians()
+        );
+
+        let three_radians = Angle::from(Radians(3.0));
+        let lat_lon_0_r3 = LatLong::new(zero, three_radians);
+        let point_3 = Point::from(&lat_lon_0_r3);
+        assert!(is_unit(&point_3));
+        assert_eq!(zero.to_radians(), latitude(&point_3).to_radians());
+        assert_eq!(three_radians.to_radians(), longitude(&point_3).to_radians());
+
+        assert!(is_west_of(&point_0, &point_3));
+        assert_eq!(
+            -three_radians.to_radians(),
+            delta_longitude(&point_0, &point_3).to_radians()
+        );
+
+        assert_eq!(false, is_west_of(&point_1, &point_3));
+        let delta_lon13 =
+            std::f64::consts::PI - 3.0 - delta_longitude(&point_1, &point_3).to_radians().0;
+        assert!(libm::fabs(delta_lon13) < std::f64::EPSILON);
+
+        let lat_lon_0_mr3 = LatLong::new(zero, -three_radians);
+        let point_4 = Point::from(&lat_lon_0_mr3);
+        assert!(is_unit(&point_4));
+        assert_eq!(zero.to_radians(), latitude(&point_4).to_radians());
+        assert_eq!(
+            -three_radians.to_radians(),
+            longitude(&point_4).to_radians()
+        );
+
+        assert_eq!(false, is_west_of(&point_0, &point_4));
+        assert_eq!(
+            three_radians.to_radians(),
+            delta_longitude(&point_0, &point_4).to_radians()
+        );
+
+        assert!(is_west_of(&point_1, &point_4));
+        let delta_lon14 =
+            3.0 - std::f64::consts::PI - delta_longitude(&point_1, &point_4).to_radians().0;
+        assert!(libm::fabs(delta_lon14) < std::f64::EPSILON);
+
+        let pi_m16epsilon = Angle::from(Radians(std::f64::consts::PI - 16.0 * std::f64::EPSILON));
+        let point_5 = to_sphere(zero, pi_m16epsilon);
+        assert!(is_unit(&point_5));
+
+        assert!(is_west_of(&point_0, &point_5));
+        assert_eq!(
+            -pi_m16epsilon.to_radians(),
+            delta_longitude(&point_0, &point_5).to_radians()
+        );
+
+        let point_6 = to_sphere(zero, -pi_m16epsilon);
+        assert!(is_unit(&point_6));
+
+        assert_eq!(false, is_west_of(&point_0, &point_6));
+        assert_eq!(
+            pi_m16epsilon.to_radians(),
+            delta_longitude(&point_0, &point_6).to_radians()
+        );
     }
 
     #[test]
-    fn test_calculate_gc_distance_delta_latitude() {
-        let start_latitude = -80.0;
-        let start_angle = Angle::from(Degrees(start_latitude));
-        let delta_lon = Angle::default();
+    fn test_point_distance() {
+        let zero = Angle::from_y_x(0.0, 1.0);
+        let ninety = Angle::from(Degrees(90.0));
+        let one_eighty = Angle::from(Degrees(180.0));
 
-        for i in 1..160 {
-            let value = i as f64;
-            let latitude = start_latitude + value;
-            let angle = Angle::from(Degrees(latitude));
-            let expected = DEG2RAD * value;
-            let distance = calculate_gc_distance(start_angle, angle, delta_lon);
+        let south_pole = to_sphere(-ninety, zero);
+        let north_pole = to_sphere(ninety, zero);
 
-            // assert_eq!(expected, distance.0);  // Does not work, not accurate enough.
-            let delta_result = libm::fabs(expected - distance.0);
-            assert!(delta_result <= 4.0 * std::f64::EPSILON);
-        }
+        assert_eq!(0.0, sq_distance(&south_pole, &south_pole));
+        assert_eq!(0.0, sq_distance(&north_pole, &north_pole));
+        assert_eq!(4.0, sq_distance(&south_pole, &north_pole));
+
+        assert_eq!(0.0, distance(&south_pole, &south_pole));
+        assert_eq!(0.0, distance(&north_pole, &north_pole));
+        assert_eq!(2.0, distance(&south_pole, &north_pole));
+
+        // Greenwich equator
+        let g_eq = to_sphere(zero, zero);
+
+        // Test IDL equator
+        let idl_eq = to_sphere(zero, one_eighty);
+
+        assert_eq!(0.0, sq_distance(&g_eq, &g_eq));
+        assert_eq!(0.0, sq_distance(&idl_eq, &idl_eq));
+        assert_eq!(4.0, sq_distance(&g_eq, &idl_eq));
+
+        assert_eq!(0.0, distance(&g_eq, &g_eq));
+        assert_eq!(0.0, distance(&idl_eq, &idl_eq));
+        assert_eq!(2.0, distance(&g_eq, &idl_eq));
     }
 
     #[test]
-    fn test_haversine_distance_delta_latitude() {
-        let start_latitude = -80.0;
-        let start_angle = Angle::from(Degrees(start_latitude));
-        let delta_lon = Angle::default();
+    fn test_point_gc_distance() {
+        let zero = Angle::from_y_x(0.0, 1.0);
+        let ninety = Angle::from(Degrees(90.0));
+        let one_eighty = Angle::from(Degrees(180.0));
 
-        for i in 1..160 {
-            let value = i as f64;
-            let latitude = start_latitude + value;
-            let angle = Angle::from(Degrees(latitude));
-            let expected = DEG2RAD * value;
-            let distance = haversine_distance(start_angle, angle, delta_lon);
+        let south_pole = to_sphere(-ninety, zero);
+        let north_pole = to_sphere(ninety, zero);
 
-            // assert_eq!(expected, distance.0);  // Does not work, not accurate enough.
-            let delta_result = libm::fabs(expected - distance.0);
-            assert!(delta_result <= 32.0 * std::f64::EPSILON);
-        }
+        assert_eq!(0.0, gc_distance(&south_pole, &south_pole).0);
+        assert_eq!(0.0, gc_distance(&north_pole, &north_pole).0);
+        assert_eq!(
+            std::f64::consts::PI,
+            gc_distance(&south_pole, &north_pole).0
+        );
+
+        // Greenwich equator
+        let g_eq = to_sphere(zero, zero);
+
+        // Test IDL equator
+        let idl_eq = to_sphere(zero, one_eighty);
+
+        assert_eq!(0.0, gc_distance(&g_eq, &g_eq).0);
+        assert_eq!(0.0, gc_distance(&idl_eq, &idl_eq).0);
+        assert_eq!(std::f64::consts::PI, gc_distance(&g_eq, &idl_eq).0);
     }
 
     #[test]
-    fn test_distance_delta_longitude() {
-        let end_latitude = 40.0;
-        let start_angle = Angle::from(Degrees(-end_latitude));
-        let end_angle = Angle::from(Degrees(end_latitude));
+    fn test_point_gc_distance_angle() {
+        let zero = Angle::from_y_x(0.0, 1.0);
+        let ninety = Angle::from(Degrees(90.0));
+        let one_eighty = Angle::from(Degrees(180.0));
 
-        for i in 1..160 {
-            let value = i as f64;
-            let delta_lon = Angle::from(Degrees(value));
-            let expected = calculate_gc_distance(start_angle, end_angle, delta_lon);
-            let distance = haversine_distance(start_angle, end_angle, delta_lon);
+        let south_pole = to_sphere(-ninety, zero);
+        let north_pole = to_sphere(ninety, zero);
 
-            // assert_eq!(expected.0, distance.0);  // Does not work, not accurate enough.
-            let delta_result = libm::fabs(expected.0 - distance.0);
-            assert!(delta_result <= 8.0 * std::f64::EPSILON);
-        }
+        assert_eq!(zero, gc_distance_angle(&south_pole, &south_pole));
+        assert_eq!(zero, gc_distance_angle(&north_pole, &north_pole));
+        assert_eq!(one_eighty, gc_distance_angle(&south_pole, &north_pole));
+
+        // Greenwich equator
+        let g_eq = to_sphere(zero, zero);
+
+        // Test IDL equator
+        let idl_eq = to_sphere(zero, one_eighty);
+
+        assert_eq!(zero, gc_distance_angle(&g_eq, &g_eq));
+        assert_eq!(zero, gc_distance_angle(&idl_eq, &idl_eq));
+        assert_eq!(one_eighty, gc_distance_angle(&g_eq, &idl_eq));
     }
 
     #[test]
-    fn test_great_circle_90n_0n_0e() {
-        let angle_90 = Angle::from_y_x(1.0, 0.0);
-        let angle_0 = Angle::default();
+    fn test_calculate_intersection_points() {
+        let zero = Angle::from_y_x(0.0, 1.0);
+        let ninety = Angle::from(Degrees(90.0));
+        let one_eighty = Angle::from(Degrees(180.0));
 
-        let a = LatLon::new(angle_90, angle_0);
-        let b = LatLon::new(angle_0, angle_0);
-        let (azimuth, distance) = calc_gc_azimuth_distance(a, b);
+        let south_pole = to_sphere(-ninety, zero);
+        let north_pole = to_sphere(ninety, zero);
+        let idl = to_sphere(zero, one_eighty);
 
-        // Note: multiplication is not precise...
-        // assert_eq!(DEG2RAD * 30.0, distance.0);
-        let delta_distance = libm::fabs(DEG2RAD * 90.0 - distance.0);
-        assert!(delta_distance <= 48.0 * std::f64::EPSILON);
-        assert_eq!(180.0, Degrees::from(azimuth).0);
+        let equator_intersection = calculate_intersection_point(&south_pole, &north_pole);
+        assert!(equator_intersection.is_none());
+
+        let gc_intersection1 = calculate_intersection_point(&idl, &north_pole).unwrap();
+        let gc_intersection2 = calculate_intersection_point(&idl, &south_pole).unwrap();
+
+        assert_eq!(gc_intersection1, -gc_intersection2);
     }
 
     #[test]
-    fn test_great_circle_90s_0n_0e() {
-        let angle_m90 = Angle::from_y_x(-1.0, 0.0);
-        let angle_0 = Angle::default();
-
-        let a = LatLon::new(angle_m90, angle_0);
-        let b = LatLon::new(angle_0, angle_0);
-        let (azimuth, distance) = calc_gc_azimuth_distance(a, b);
-
-        // Note: multiplication is not precise...
-        // assert_eq!(DEG2RAD * 30.0, distance.0);
-        let delta_distance = libm::fabs(DEG2RAD * 90.0 - distance.0);
-        assert!(delta_distance <= 48.0 * std::f64::EPSILON);
-        assert_eq!(0.0, Degrees::from(azimuth).0);
-    }
-
-    #[test]
-    fn test_great_circle_30n_60n_0e() {
-        let angle_30 = Angle::from(Degrees(30.0));
-        let angle_60 = Angle::from(Degrees(60.0));
-        let angle_0 = Angle::default();
-
-        let a = LatLon::new(angle_30, angle_0);
-        let b = LatLon::new(angle_60, angle_0);
-        let (azimuth, distance) = calc_gc_azimuth_distance(a, b);
-
-        // Note: multiplication is not precise...
-        // assert_eq!(DEG2RAD * 30.0, distance.0);
-        let delta_distance = libm::fabs(DEG2RAD * 30.0 - distance.0);
-        assert!(delta_distance <= 48.0 * std::f64::EPSILON);
-        assert_eq!(0.0, Degrees::from(azimuth).0);
-    }
-
-    #[test]
-    fn test_great_circle_60n_30n_0e() {
-        let angle_30 = Angle::from(Degrees(30.0));
-        let angle_60 = Angle::from(Degrees(60.0));
-        let angle_0 = Angle::default();
-
-        let a = LatLon::new(angle_30, angle_0);
-        let b = LatLon::new(angle_60, angle_0);
-        let (azimuth, distance) = calc_gc_azimuth_distance(b, a);
-
-        // let distance = calculate_gc_distance(angle_60, angle_30, angle_0);
-        // Note: multiplication is not precise...
-        // assert_eq!(DEG2RAD * 30.0, distance.0);
-        let delta_distance = libm::fabs(DEG2RAD * 30.0 - distance.0);
-        assert!(delta_distance <= 48.0 * std::f64::EPSILON);
-        assert_eq!(180.0, Degrees::from(azimuth).0);
-    }
-
-    #[test]
-    fn test_great_circle_60n_60n_30w() {
-        let angle_m30 = Angle::from(Degrees(-30.0));
-        let angle_60 = Angle::from(Degrees(60.0));
-
-        let a = LatLon::new(angle_60, Angle::default());
-        let b = LatLon::new(angle_60, angle_m30);
-        let (azimuth, distance) = calc_gc_azimuth_distance(a, b);
-
-        assert_eq!(DEG2RAD * 14.87094445226370419, distance.0);
-        assert_eq!(-76.93568657049171, Degrees::from(azimuth).0);
-    }
-
-    #[test]
-    fn test_great_circle_60s_60s_30e() {
-        let angle_30 = Angle::from(Degrees(30.0));
-        let angle_m60 = Angle::from(Degrees(-60.0));
-
-        let a = LatLon::new(angle_m60, Angle::default());
-        let b = LatLon::new(angle_m60, angle_30);
-        let (azimuth, distance) = calc_gc_azimuth_distance(a, b);
-
-        assert_eq!(DEG2RAD * 14.87094445226370419, distance.0);
-        assert_eq!(180.0 - 76.93568657049171, Degrees::from(azimuth).0);
-    }
-
-    #[test]
-    fn test_latlons_new() {
-        let lats = [44.0, 46.0, 46.0, 44.0];
-        let lons = [1.0, 1.0, -1.0, -1.0];
+    fn test_point_from_latlongs() {
+        let lats = [44.0, 46.0, 46.0, 44.0, 44.0];
+        let lons = [1.0, 1.0, -1.0, -1.0, 1.0];
 
         let lats_angles = from_degrees(&lats);
         let lons_angles = from_degrees(&lons);
-        let latlons = LatLons::new(lats_angles.as_slice(), lons_angles.as_slice());
+        let latlongs = LatLongs::new(lats_angles.as_slice(), lons_angles.as_slice());
 
-        assert_eq!(latlons.0.len(), lats.len());
-        for i in 0..lats.len() {
-            assert_eq!(lats[i], Degrees::from(latlons.0[i].lat()).0);
-            assert_eq!(lons[i], Degrees::from(latlons.0[i].lon()).0);
-        }
-    }
-
-    #[test]
-    fn test_latlons_try_from_vec_pair() {
-        let lats = vec![44.0, 46.0, 46.0, 44.0];
-        let lons = vec![1.0, 1.0, -1.0, -1.0];
-
-        let latlons = LatLons::try_from((lats.as_slice(), lons.as_slice())).unwrap();
-
-        assert!(!latlons.is_closed_loop());
-        assert_eq!(latlons.0.len(), lats.len());
-        for i in 0..lats.len() {
-            assert_eq!(lats[i], Degrees::from(latlons.0[i].lat()).0);
-            assert_eq!(lons[i], Degrees::from(latlons.0[i].lon()).0);
-        }
-
-        let empty_vals = Vec::<f64>::new();
-        let result = LatLons::try_from((empty_vals.as_slice(), lons.as_slice()));
-        assert_eq!(Err("lats and/or lons not valid to combine"), result);
-
-        let short_lons = vec![1.0, 1.0, -1.0];
-        let result = LatLons::try_from((lats.as_slice(), short_lons.as_slice()));
-        assert_eq!(Err("lats and/or lons not valid to combine"), result);
-
-        let invalid_lats = vec![44.0, 90.01, 46.0, 44.0];
-        let result = LatLons::try_from((invalid_lats.as_slice(), lons.as_slice()));
-        assert_eq!(Err("lats and/or lons not valid to combine"), result);
-
-        let invalid_lons = vec![1.0, 180.01, -1.0, -1.0];
-        let result = LatLons::try_from((lats.as_slice(), invalid_lons.as_slice()));
-        assert_eq!(Err("lats and/or lons not valid to combine"), result);
-    }
-
-    #[test]
-    fn test_serde_latlon() {
-        let angle_20 = Angle::from(Degrees(20.0));
-        let latlon = LatLon::new(angle_20, angle_20);
-
-        let serialized = to_string(&latlon).unwrap();
-        // println!("serialized = {}", serialized);
-        let deserialized: LatLon = serde_json::from_str(&serialized).unwrap();
-        assert_eq!(latlon, deserialized);
-    }
-
-    #[test]
-    fn test_serde_latlons() {
-        let angle_20 = Angle::from(Degrees(20.0));
-        let latlon0 = LatLon::new(angle_20, angle_20);
-
-        let angle_05 = Angle::from(Degrees(0.5));
-        let angle_102 = Angle::from(Degrees(102.0));
-        let latlon1 = LatLon::new(angle_05, angle_102);
-
-        let latlons: Vec<LatLon> = vec![latlon0, latlon1];
-
-        let serialized = to_string(&latlons).unwrap();
-        // println!("serialized = {}", serialized);
-        let deserialized: Vec<LatLon> = serde_json::from_str(&serialized).unwrap();
-        assert_eq!(latlons, deserialized);
-    }
-
-    #[test]
-    fn test_serde_multi_line_string() {
-        let angle_20 = Angle::from(Degrees(20.0));
-        let latlon0 = LatLon::new(angle_20, angle_20);
-
-        let angle_05 = Angle::from(Degrees(0.5));
-        let angle_102 = Angle::from(Degrees(102.0));
-        let latlon1 = LatLon::new(angle_05, angle_102);
-
-        let latlons0: Vec<LatLon> = vec![latlon0, latlon1];
-        let latlons1: Vec<LatLon> = vec![latlon0, latlon1];
-
-        let latlonsvec: Vec<Vec<LatLon>> = vec![latlons0, latlons1];
-
-        let serialized = to_string(&latlonsvec).unwrap();
-        // println!("serialized = {}", serialized);
-        let deserialized: Vec<Vec<LatLon>> = serde_json::from_str(&serialized).unwrap();
-        assert_eq!(latlonsvec, deserialized);
-    }
-
-    #[test]
-    fn test_serde_geojson_latlon() {
-        let angle_05 = Angle::from(Degrees(0.5));
-        let angle_102 = Angle::from(Degrees(102.0));
-        let latlon = LatLon::new(angle_05, angle_102);
-
-        let position = geojson::PointType::from(&latlon);
-        let serialized = to_string(&position).unwrap();
-        println!("serialized = {}", serialized);
-        let deserialized: geojson::PointType = serde_json::from_str(&serialized).unwrap();
-        assert_eq!(position, deserialized);
-
-        let value = LatLon::try_from(deserialized.as_slice()).unwrap();
-        assert_eq!(latlon, value);
-    }
-
-    #[test]
-    fn test_serde_geojson_latlons() {
-        let angle_20 = Angle::from(Degrees(20.0));
-        let latlon0 = LatLon::new(angle_20, angle_20);
-
-        let angle_05 = Angle::from(Degrees(0.5));
-        let angle_102 = Angle::from(Degrees(102.0));
-        let latlon1 = LatLon::new(angle_05, angle_102);
-
-        let latlons = LatLons(vec![latlon0, latlon1]);
-
-        let linestring = geojson::LineStringType::from(&latlons);
-        let serialized = to_string(&linestring).unwrap();
-        // println!("serialized = {}", serialized);
-        let deserialized: geojson::LineStringType = serde_json::from_str(&serialized).unwrap();
-        assert_eq!(linestring, deserialized);
-
-        let value = LatLons::try_from(deserialized.as_slice()).unwrap();
-        assert_eq!(latlons, value);
-    }
-
-    #[test]
-    fn test_serde_geojson_polygon() {
-        let angle_20 = Angle::from(Degrees(20.0));
-        let latlon0 = LatLon::new(angle_20, angle_20);
-
-        let angle_05 = Angle::from(Degrees(0.5));
-        let angle_102 = Angle::from(Degrees(102.0));
-        let latlon1 = LatLon::new(angle_05, angle_102);
-
-        let latlons0 = LatLons(vec![latlon0, latlon1]);
-        let latlons1 = LatLons(vec![latlon0, latlon1]);
-
-        let latlonsvec = MultiLatLons(vec![latlons0, latlons1]);
-
-        let polygon = geojson::PolygonType::from(&latlonsvec);
-        let serialized = to_string(&polygon).unwrap();
-        // println!("serialized = {}", serialized);
-        let deserialized: geojson::PolygonType = serde_json::from_str(&serialized).unwrap();
-        assert_eq!(polygon, deserialized);
-
-        let value = MultiLatLons::try_from(deserialized.as_slice()).unwrap();
-        assert_eq!(latlonsvec, value);
+        let points = Vec::<Point>::from(&latlongs);
+        assert_eq!(5, points.len());
     }
 }

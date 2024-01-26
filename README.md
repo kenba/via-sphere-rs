@@ -1,49 +1,86 @@
 # via-sphere
 
-[![License](https://img.shields.io/badge/License-MIT-blue)](https://opensource.org/license/mit/)
 [![Rust](https://github.com/kenba/via-sphere-rs/actions/workflows/rust.yml/badge.svg)](https://github.com/kenba/via-sphere-rs/actions)
+[![codecov](https://codecov.io/gh/kenba/via-sphere-rs/graph/badge.svg?token=8FBO2N4N69)](https://codecov.io/gh/kenba/via-sphere-rs)
+[![License](https://img.shields.io/badge/License-MIT-blue)](https://opensource.org/license/mit/)
 
 A library for performing geometric calculations on the surface of a sphere.
 
 ## Description
 
-[Spherical vector geometry](docs/Spherical_Vector_Geometry.md) uses a combination
-of spherical trigonometry and vector geometry to calculate distances, angles and
-positions on the surface of a sphere.
+This library uses a combination of spherical trigonometry and vectors
+to calculate angles, distances and positions on the surface of a unit sphere.
 
-Spherical trigonometry is geometry performed on the surface of a sphere.  
-Menelaus of Alexandria established a basis for spherical trigonometry nearly two thousand years ago.
-Abu al-Bīrūnī and John Napier (among others) provided equations and tables that have been depended
-upon for [global navigation](docs/Global_Navigation.md) across deserts and oceans for
-many hundreds of years.
+![Sphere Class Diagram](docs/images/sphere_class_diagram.svg)  
+*Figure 1 Class Diagram*
 
-Vector geometry is geometry performed using vectors.  
-Vector geometry is relatively new compared to spherical geometry,
-being only a few hundred years old.
-It is widely used in computer systems and it can also be used to
-perform measurements on the surface of a sphere, see:
-[n-vector](http://www.navlab.net/nvector/).
+The `trig` and `latlong` modules perform spherical trigonometric calculations;  
+the `sphere` module uses vectors.
+
+The library uses the [contracts](https://crates.io/crates/contracts) crate
+to implement Design By Contract [(DbC)](https://wiki.c2.com/?DesignByContract).  
+It also defines a `Validate` trait to define an `is_valid` invariant
+function to support Design By Contract invariants.
+
+### Spherical trigonometry
+
+[Spherical trigonometry](https://en.wikipedia.org/wiki/Spherical_trigonometry)
+is the branch of spherical geometry pertaining to spherical triangles.
+A spherical triangle is a triangle on the surface of a sphere.
+The sides of spherical triangles are [great circles](https://en.wikipedia.org/wiki/Great_circle) i.e., the shortest path between two points on the surface of a sphere - the equivalent of straight line segments in planar geometry.
+
+Spherical trigonometry is particularly useful for calculating great circle arcs
+between two points from their latitudes and longitudes.
+
+### Vectors
+
+Tracking progress along a great circle e.g.: measuring across track distance
+from a great circle or distance along a great circle arc is more simply and
+efficiently calculated using vectors instead of spherical trigonometry.
+
+Vectors can also be used to perform measurements on the surface of a sphere,
+by using 3D vectors with x, y and z coordinates to represent points, see Figure 2.
+
+![Spherical Vector Coordinates](docs/images/ECEF_coordinates.png)  
+*Figure 2 Spherical Vector Coordinates*
+
+A key feature of vectors is that a great circle can be represented by q 3D vector
+perpendicular to the plane of the great circle i.e. its `pole`.
+For example, the equator may be represented the (true) North pole or South pole.
+
+Using vectors enables the across track distance of a point from a great circle
+to be calculated using little more than a vector [dot product](https://en.wikipedia.org/wiki/Dot_product). Similarly, other calculations such as along track distance
+and great circle arc intersections are simple to calculate with vectors.
 
 ## Design
 
-Points on the surface of a sphere are represented by 3D vectors with x, y and z
-coordinates see Figure 1.
+The library uses the [newtype](https://rust-unofficial.github.io/patterns/patterns/behavioural/newtype.html) idiom to represent angles in `Degrees` and `Radians`.
+It also uses the `newtype` idiom to represent `UnitNegRange`s; values that lie between -1.0 and +1.0 inclusive.
 
-![Spherical Vector Coordinates](docs/images/ECEF_coordinates.png)  
-*Figure 1 Spherical Vector Coordinates*
+The `Angle` struct represents an angle by its sine and cosine components as
+`UnitNegRange`s.
+The `LatLong` struct represents a coordinate on the unit sphere by
+its latitude and longitude as a pair of `Angle` structs.  
+This representation simplifies the conversion of `LatLong`s to `Point` vectors and
+spherical trigonometry calculations.
 
-All distances and angles on the surface of a sphere are measured in radians.  
-Physical distances can be calculated by multiplying by the radius of the sphere.
+The `geojson` module defines types derived from `LatLong` for
+[GeoJSON](https://geojson.org/) serialization/deserialization using the
+[geo-types](https://crates.io/crates/geo-types) crate, see *Figure 3*.
 
-Functions are provided to convert latitude/longitude coordinates into
-spherical vectors and back again.  
-Latitude and longitude are measured in degrees.  
-Note: when representing points on the Earth's surface, the 3D vector coordinates
-are in the standard WGS84 [ECEF](https://en.wikipedia.org/wiki/ECEF)
-orientation with the z axis between the North and South poles, see Figure 1.
+![LatLong Class Diagram](docs/images/latlong_class_diagram.svg)  
+*Figure 3 LatLong Class Diagram*
+
+Note: [Antimeridian Cutting](https://datatracker.ietf.org/doc/html/rfc7946#section-3.1.9) is **not** required, since this library **can** handle
+features that cross the antimeridian.
+
+The library uses the [contracts](https://crates.io/crates/contracts) crate to
+implement Design By Contract [(DbC)](https://wiki.c2.com/?DesignByContract).
+It also defines a `Validate` trait to define an `is_valid` invariant function
+to support the use of Design By Contract throughout the library.
 
 ## License
 
-`via-sphere` is provided under a MIT license, see [LICENSE](LICENSE.txt).
+`via-sphere` is provided under a MIT license, see [LICENSE](LICENSE).
 
 Contact <sphere@via-technology.aero> for more information.

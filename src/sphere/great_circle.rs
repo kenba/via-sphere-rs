@@ -505,6 +505,10 @@ mod tests {
         let atd_1 = along_track_distance(&point_0, &pole_1, &pos_1);
         assert_eq!(0.0, atd_1.0);
 
+        // Test the along track distance of the pole
+        let atd_pole = along_track_distance(&point_0, &pole_1, &pole_1);
+        assert_eq!(0.0, atd_pole.0);
+
         let pos_2 = position(&point_0, &pole_2, -one_degree);
         assert!(is_unit(&pos_2));
         let xtd_2 = cross_track_distance(&pole_2, &pos_2);

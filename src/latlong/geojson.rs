@@ -24,8 +24,8 @@
 //! Note: [Antimeridian Cutting](https://datatracker.ietf.org/doc/html/rfc7946#section-3.1.9) is **not** required, since this library **can** handle
 //! features that cross the antimeridian.
 
-use crate::trig::{Angle, Degrees};
 use crate::latlong::{LatLong, LatLongs};
+use crate::trig::{Angle, Degrees};
 use geo_types;
 
 impl TryFrom<&geo_types::Coord> for LatLong {

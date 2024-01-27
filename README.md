@@ -1,8 +1,8 @@
 # via-sphere
 
+[![License](https://img.shields.io/badge/License-MIT-blue)](https://opensource.org/license/mit/)
 [![Rust](https://github.com/kenba/via-sphere-rs/actions/workflows/rust.yml/badge.svg)](https://github.com/kenba/via-sphere-rs/actions)
 [![codecov](https://codecov.io/gh/kenba/via-sphere-rs/graph/badge.svg?token=8FBO2N4N69)](https://codecov.io/gh/kenba/via-sphere-rs)
-[![License](https://img.shields.io/badge/License-MIT-blue)](https://opensource.org/license/mit/)
 
 A library for performing geometric calculations on the surface of a sphere.
 
@@ -17,15 +17,10 @@ to calculate angles, distances and positions on the surface of a unit sphere.
 The `trig` and `latlong` modules perform spherical trigonometric calculations;  
 the `sphere` module uses vectors.
 
-The library uses the [contracts](https://crates.io/crates/contracts) crate
-to implement Design By Contract [(DbC)](https://wiki.c2.com/?DesignByContract).  
-It also defines a `Validate` trait to define an `is_valid` invariant
-function to support Design By Contract invariants.
-
 ### Spherical trigonometry
 
 [Spherical trigonometry](https://en.wikipedia.org/wiki/Spherical_trigonometry)
-is the branch of spherical geometry pertaining to spherical triangles.
+is the branch of spherical geometry involving spherical triangles.
 A spherical triangle is a triangle on the surface of a sphere.
 The sides of spherical triangles are [great circles](https://en.wikipedia.org/wiki/Great_circle) i.e., the shortest path between two points on the surface of a sphere - the equivalent of straight line segments in planar geometry.
 
@@ -39,7 +34,7 @@ from a great circle or distance along a great circle arc is more simply and
 efficiently calculated using vectors instead of spherical trigonometry.
 
 Vectors can also be used to perform measurements on the surface of a sphere,
-by using 3D vectors with x, y and z coordinates to represent points, see Figure 2.
+by using 3D vectors with x, y and z coordinates to represent points, see *Figure 2*.
 
 ![Spherical Vector Coordinates](docs/images/ECEF_coordinates.png)  
 *Figure 2 Spherical Vector Coordinates*
@@ -74,10 +69,15 @@ The `geojson` module defines types derived from `LatLong` for
 Note: [Antimeridian Cutting](https://datatracker.ietf.org/doc/html/rfc7946#section-3.1.9) is **not** required, since this library **can** handle
 features that cross the antimeridian.
 
-The library uses the [contracts](https://crates.io/crates/contracts) crate to
-implement Design By Contract [(DbC)](https://wiki.c2.com/?DesignByContract).
-It also defines a `Validate` trait to define an `is_valid` invariant function
-to support the use of Design By Contract throughout the library.
+The library uses the [contracts](https://crates.io/crates/contracts) crate
+to implement Design By Contract [(DbC)](https://wiki.c2.com/?DesignByContract).  
+It also defines a `Validate` trait to define an `is_valid` invariant
+function to support Design By Contract invariants.
+
+## Contribution
+
+If you want to contribute through code or documentation, the [Contributing](CONTRIBUTING.md) guide is the best place to start. If you have any questions, please feel free to ask.
+Just please abide by our [Code of Conduct](CODE_OF_CONDUCT.md).
 
 ## License
 

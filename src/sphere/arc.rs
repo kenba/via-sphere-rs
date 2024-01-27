@@ -25,7 +25,8 @@ use super::great_circle::intersection::{
     calculate_same_gc_distance, is_within,
 };
 use super::great_circle::{
-    calculate_atd_and_xtd, calculate_pole, direction, position, sq_cross_track_distance,
+    calculate_atd_and_xtd, calculate_pole, direction, position, rotate_position,
+    sq_cross_track_distance,
 };
 use super::{
     are_orthogonal, gc_distance, gc_distance_angle, is_unit, sq_distance, winding_number, Point,
@@ -200,9 +201,9 @@ impl Arc {
     /// * `angle` the angle from the arc start.
     ///
     /// returns the point at angle from the arc start, at arc length.
-    // pub fn angle_position(&self, angle: Angle) -> Point {
-    //     rotate_position(&self.a, &self.pole, angle, Angle::from(self.length))
-    // }
+    pub fn angle_position(&self, angle: Angle) -> Point {
+        rotate_position(&self.a, &self.pole, angle, Angle::from(self.length))
+    }
 
     /// The Arc at the end of an Arc, just the point if `half_width` is zero.
     /// @param `at_b` if true the arc at b, else the arc at a.
@@ -547,6 +548,9 @@ mod tests {
             arc3d1.half_width().0,
             precision
         ));
+
+        let angle = Angle::from(Degrees(10.0));
+        let _angle_pos = arc3d1.angle_position(angle);
 
         let end_arc1 = arc3d1.end_arc(false);
         let point3d_3 = end_arc1.a();

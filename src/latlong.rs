@@ -21,30 +21,27 @@
 //! The latlong module contains types and functions for representing positions
 //! on the surface of a sphere.
 //!
-//! All distances on the surface of a sphere are measured in radians.  
+//! All distances on the surface of the unit sphere are measured in radians.  
 //! Physical distances can be calculated by multiplying by the radius of the sphere.
 //!
 //! The `latlong` module includes the `calculate_azimuth_and_distance` function to
 //! calculate the initial azimuth (a.k.a bearing and distance) between two positions.
 //! The azimuth is returned as an `Angle` and the distance is returned in `Radians`.
 //!
-//! The `latlong` module also contains types and functions for serializing and
-//! deserializing `LatLong` and collections of `LatLongs` using
+//! The module also contains types and functions for serializing and
+//! deserializing `LatLong` and slices/vectors of `LatLongs` using
 //! [serde](https://crates.io/crates/serde).
 
 pub mod geojson;
 
 use crate::trig::{
     calculate_gc_azimuth, calculate_gc_distance, from_degrees, valid_latitudes, valid_longitudes,
-    Angle, Radians,
+    Angle, Degrees, Radians,
 };
 use crate::Validate;
 use contracts::{debug_invariant, debug_requires};
 
 /// A position as a latitude and longitude pair of `Angles`.
-///
-/// A position on the surface of a sphere is represented by a pair of `Angles`:
-/// lat and lon.
 #[derive(Clone, Copy, Debug, PartialEq)]
 pub struct LatLong {
     lat: Angle,
@@ -119,7 +116,7 @@ impl LatLongs {
 }
 
 /////////////////////////////////////////////////////////////////////////////
-// CSV
+// Pairs of vectors: latitude vector and longitude vector
 
 impl TryFrom<(&[f64], &[f64])> for LatLongs {
     type Error = &'static str;
@@ -147,14 +144,22 @@ impl TryFrom<(&[f64], &[f64])> for LatLongs {
     }
 }
 
-// impl From<&LatLongs> for (Vec<f64>, Vec<f64>) {
-//     fn from (values: &LatLongs) -> Self {
-//         {
-//             values.0.iter().map(|a|Degrees::from(a.lat()).0).collect(),
-//             values.0.iter().map(|a|Degrees::from(a.lon()).0).collect()
-//         }
-//     }
-// }
+impl From<LatLongs> for (Vec<Degrees>, Vec<Degrees>) {
+    /// Convert a slice of LatLongs to a pair of latitude and longitude vectors
+    /// of `Degrees`.
+    ///
+    /// * `values` LatLongs
+    ///
+    /// return a pair of latitude and longitude vectors of `Degrees`.
+    fn from(values: LatLongs) -> Self {
+        {
+            (
+                values.0.iter().map(|a| Degrees::from(a.lat())).collect(),
+                values.0.iter().map(|a| Degrees::from(a.lon())).collect(),
+            )
+        }
+    }
+}
 
 #[cfg(test)]
 mod tests {
@@ -314,6 +319,20 @@ mod tests {
             assert!(is_within_tolerance(
                 lons[i],
                 Degrees::from(latlongs.0[i].lon()).0,
+                64.0 * std::f64::EPSILON
+            ));
+        }
+
+        let result: (Vec<Degrees>, Vec<Degrees>) = LatLongs::into(latlongs);
+        for i in 0..lats.len() {
+            assert!(is_within_tolerance(
+                lats[i],
+                result.0[i].0,
+                64.0 * std::f64::EPSILON
+            ));
+            assert!(is_within_tolerance(
+                lons[i],
+                result.1[i].0,
                 64.0 * std::f64::EPSILON
             ));
         }

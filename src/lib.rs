@@ -18,8 +18,8 @@
 // OUT OF OR IN CONNECTION WITH THE SOFTWARE OR THE USE OR OTHER DEALINGS IN
 // THE SOFTWARE.
 
-//! [![Rust](https://github.com/kenba/via-sphere-rs/actions/workflows/rust.yml/badge.svg)](https://github.com/kenba/via-sphere-rs/actions)
 //! [![License](https://img.shields.io/badge/License-MIT-blue)](https://opensource.org/license/mit/)
+//! [![Rust](https://github.com/kenba/via-sphere-rs/actions/workflows/rust.yml/badge.svg)](https://github.com/kenba/via-sphere-rs/actions)
 //! [![codecov](https://codecov.io/gh/kenba/via-sphere-rs/graph/badge.svg?token=8FBO2N4N69)](https://codecov.io/gh/kenba/via-sphere-rs)
 //!
 //! This library uses a combination of spherical trigonometry and vectors

@@ -201,6 +201,7 @@ impl Arc {
     /// * `angle` the angle from the arc start.
     ///
     /// returns the point at angle from the arc start, at arc length.
+    #[must_use]
     pub fn angle_position(&self, angle: Angle) -> Point {
         rotate_position(&self.a, &self.pole, angle, Angle::from(self.length))
     }

@@ -145,10 +145,10 @@ impl TryFrom<(&[f64], &[f64])> for LatLongs {
 }
 
 impl From<LatLongs> for (Vec<Degrees>, Vec<Degrees>) {
-    /// Convert a slice of LatLongs to a pair of latitude and longitude vectors
+    /// Convert a slice of `LatLongs` to a pair of latitude and longitude vectors
     /// of `Degrees`.
     ///
-    /// * `values` LatLongs
+    /// * `values` `LatLongs`
     ///
     /// return a pair of latitude and longitude vectors of `Degrees`.
     fn from(values: LatLongs) -> Self {
